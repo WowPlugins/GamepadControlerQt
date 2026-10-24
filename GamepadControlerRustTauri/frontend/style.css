@@ -408,6 +408,18 @@ body::before {
   box-shadow: 0 3px 12px rgba(127, 201, 196, 0.3); /* 青色光晕 */
 }
 
+/* ---- 目标游戏 exe 选择行 ---- */
+.wow-row {
+  display: flex; /* 弹性布局 */
+  flex-direction: row; /* 水平排列 */
+  align-items: center; /* 垂直居中 */
+  gap: 8px; /* 间距 */
+}
+.wow-row .select {
+  flex: 1; /* 下拉框占满剩余宽度 */
+  min-width: 0; /* 允许压缩，避免长路径撑破布局 */
+}
+
 /* ---- 设置行 ---- */
 .slider-row {
   display: flex; /* 弹性布局 */

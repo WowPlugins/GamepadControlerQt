@@ -101,17 +101,33 @@ impl AppCore {
                 // 对分发结果再次 match。
                 match dispatch {
                     // 【Rust 语法】匹配结构体变体：`ButtonDispatch::Execute { is_pressed, mapping }` 解构出内部命名字段。
-                    ButtonDispatch::Execute { is_pressed, mapping } => {
-                        // 调用 mapper 处理按钮注入（传入按钮、状态、映射、注入器与事件发送端）。
+                    ButtonDispatch::Execute {
+                        is_pressed,
+                        mapping,
+                        layer_id,
+                    } => {
+                        // 调用 mapper 处理按钮注入（传入按钮、状态、映射、来源层、注入器、事件发送端与视角状态）。
                         self.mapper.handle_button(
                             button,
                             is_pressed,
                             // `&mapping` 传入映射的借用。
                             &mapping,
+                            &layer_id,
                             // 【Rust 语法】`injector.as_ref()`：把 Arc<InputInjector> 转成 &InputInjector 引用传给方法。
                             self.injector.as_ref(),
                             &self.event_tx,
+                            self.look.as_ref(),
                         );
+                    }
+                    // 松开激活层按钮：释放该层内产生的鼠标左右键锁存（需求6）
+                    ButtonDispatch::DeactivateLayer(layer_id) => {
+                        self.mapper.release_layer_mouse(
+                            &layer_id,
+                            self.injector.as_ref(),
+                            &self.event_tx,
+                        );
+                        // 层切换时退出精细移动，避免灵敏度残留
+                        self.look.set_fine_look(false);
                     }
                     // 开关映射的分发：向外发出 ToggleMappingRequested 事件。
                     ButtonDispatch::ToggleMapping => {
@@ -133,9 +149,24 @@ impl AppCore {
             SourceEvent::Stick(stick, x, y) => {
                 // 【Rust 语法】`let (stick, x, y) = ...`：元组解构——把函数返回的三元组同时赋给三个变量（变量名遮蔽外部旧值）。
                 let (stick, x, y) = self.steam.handle_stick_input(stick, x, y);
-                // 链式方法调用：让 mapper 处理摇杆输入（传入注入器与视角状态引用）。
-                self.mapper
-                    .handle_stick(stick, x, y, self.injector.as_ref(), self.look.as_ref());
+                let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（WASD 直发用）
+                // 链式方法调用：让 mapper 处理摇杆输入（传入注入器、视角状态引用与目标 exe）。
+                self.mapper.handle_stick(
+                    stick,
+                    x,
+                    y,
+                    self.injector.as_ref(),
+                    self.look.as_ref(),
+                    &wow_exe,
+                );
+            }
+            // 轮询心跳：检查待判定的长按是否达到阈值（需求2）
+            SourceEvent::Tick => {
+                self.mapper.check_long_press(
+                    self.injector.as_ref(),
+                    &self.event_tx,
+                    self.look.as_ref(),
+                );
             }
         }
     }

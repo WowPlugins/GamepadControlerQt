@@ -45,6 +45,19 @@
 
         <div class="dim" id="edit-subs-label">子命令</div> <!-- 子命令区标题（含已选数量） -->
         <div id="edit-subs" class="chips-row"></div> <!-- 子命令 chips（动态渲染，最多 3 个） -->
+
+        <div class="dim" id="edit-long-label">长按动作（按住超过阈值执行长按，未超过则松手时执行点击）</div> <!-- 长按动作区标题 -->
+        <div id="edit-long-kinds" class="chips-row"></div> <!-- 长按动作类型 chips（动态渲染） -->
+        <div id="edit-long-target"></div> <!-- 长按目标选择区（按长按类型动态渲染） -->
+        <div class="dim" id="edit-long-subs-label">长按子命令</div> <!-- 长按子命令区标题（含已选数量） -->
+        <div id="edit-long-subs" class="chips-row"></div> <!-- 长按子命令 chips（动态渲染，最多 3 个） -->
+        <div class="slider-row" id="edit-long-ms-row"> <!-- 长按阈值调整行 -->
+          <div class="slider-label">长按阈值</div> <!-- 阈值项名称 -->
+          <button class="mini" onclick="App.adjustLongMs(-50)">−</button> <!-- 减小阈值 50ms -->
+          <div class="slider-val" id="edit-long-ms">500ms</div> <!-- 当前阈值（动态刷新） -->
+          <button class="mini" onclick="App.adjustLongMs(50)">+</button> <!-- 增大阈值 50ms -->
+          <button class="btn" id="edit-long-clear">取消长按</button> <!-- 清除长按动作 -->
+        </div>
       </div>
     </div>
   </div>

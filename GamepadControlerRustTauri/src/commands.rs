@@ -51,6 +51,8 @@ pub struct Snapshot { // 主窗口整体状态快照
     look_smoothing: f32, // 视角平滑
     look_acceleration: f32, // 视角加速度
     overlay_opacity: f32, // 悬浮窗透明度
+    wow_exe: String, // 目标游戏（WoW）可执行文件路径
+    wow_exe_history: Vec<String>, // 历史选择过的 WoW 路径（最近优先）
 } // 结构体结束
 
 // ---------------------------------------------------------------------
@@ -111,6 +113,17 @@ pub struct LayerEditSnapshot<'r> { // 层编辑页整体快照
 
 // 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
 #[derive(Serialize)]
+pub struct ActionView { // 单个动作的展示视图（长按动作复用）
+    key_code: i32, // 键盘键码（Android KeyCode 常量）
+    kind: String, // 动作类型字符串
+    desc: String, // 动作描述
+    subs: Vec<String>, // 子命令键码（组合键）列表
+    mouse_button: Option<MouseButton>, // 鼠标键
+    layer_name: Option<String>, // 目标层名称（切换层动作时使用）
+} // 结构体结束
+
+// 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
+#[derive(Serialize)]
 pub struct MappingView { // 单个按键映射的展示视图
     key_code: i32, // 键盘键码（存储 Android KeyCode 常量，运行时再转换为 Windows 虚拟键码）
     kind: String, // 动作类型字符串（keyboard / mouse / ...）
@@ -119,6 +132,8 @@ pub struct MappingView { // 单个按键映射的展示视图
     has_mapping: bool, // 是否已有映射
     mouse_button: Option<MouseButton>, // 鼠标键（Some 表示有，None 表示无）
     layer_name: Option<String>, // 目标层名称（切换层动作时使用）
+    long_press: Option<ActionView>, // 长按动作（None 表示未配置长按）
+    long_press_ms: u32, // 长按判定阈值（毫秒）
 } // 结构体结束
 
 // 【Rust 语法】impl 实现块：为结构体添加关联方法，通过 MappingView::none() 调用（无需实例）
@@ -133,9 +148,23 @@ impl MappingView {
             has_mapping: false, // 标记为无映射
             mouse_button: None, // 无鼠标键
             layer_name: None, // 无目标层名称
+            long_press: None, // 无长按动作
+            long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS, // 长按阈值取默认值
         } // Self 字面量结束
     } // none 函数结束
 } // impl 块结束
+
+// 把动作转换为前端展示视图
+fn action_view(a: &MappedAction, subs: &[i32]) -> ActionView {
+    ActionView {
+        key_code: a.key_code,
+        kind: kind_str(a),
+        desc: describe_action(a),
+        subs: subs.iter().map(|&k| key_code_to_name(k)).collect(),
+        mouse_button: Some(a.mouse_button),
+        layer_name: a.layer_name.clone(),
+    }
+}
 
 // ---------------------------------------------------------------------
 // 层查找辅助（与 gpui 版 layer_edit.rs 一致）
@@ -186,6 +215,10 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
         } // 分支块结束
         ActionType::LookAround => "视角控制（右摇杆）".to_string(), // 视角控制（右摇杆）
         ActionType::MouseMove => "鼠标移动（左摇杆）".to_string(), // 鼠标移动（左摇杆）
+        ActionType::InteractionKey => "交互键".to_string(), // 交互键
+        ActionType::ReleaseMouseToggle => "释放鼠标锁存".to_string(), // 释放鼠标左右键锁存
+        ActionType::SwapMouseToggle => "交换鼠标左右键锁存".to_string(), // 交换左右键锁存
+        ActionType::FineLook => "鼠标精细移动".to_string(), // 右摇杆精细移动
         _ => "（未知）".to_string(), // 【Rust 语法】通配符 _ 分支：兜底匹配所有未列出的枚举值
     } // match 结束
 } // 函数结束
@@ -200,9 +233,43 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::SwitchLayer => "switchlayer", // 切换层
         ActionType::LookAround => "lookaround", // 视角控制
         ActionType::MouseMove => "mousemove", // 鼠标移动
+        ActionType::InteractionKey => "interactionkey", // 交互键
+        ActionType::ReleaseMouseToggle => "releasemousetoggle", // 释放鼠标锁存
+        ActionType::SwapMouseToggle => "swapmousetoggle", // 交换左右键锁存
+        ActionType::FineLook => "finelook", // 精细移动
         _ => "keyboard", // 未知类型兜底为 keyboard
     } // match 结束
     .to_string() // 把匹配出的 &str 转为 String（match 是表达式，可直接接方法）
+} // 函数结束
+
+/// 按类型字符串构建动作（主动作与长按动作共用）
+fn build_action(
+    kind: &str,
+    key_code: Option<i32>,
+    mouse_button: Option<String>,
+    layer_name: Option<String>,
+) -> Option<MappedAction> {
+    match kind { // 按类型字符串构建动作
+        "keyboard" => key_code.map(MappedAction::keyboard_key), // 键盘：键码存在则构建
+        "mouse" => mouse_button // 鼠标点击
+            .as_deref() // 【Rust 语法】as_deref：Option<String> → Option<&str>
+            .and_then(mouse_button_from_name) // 解析按钮名
+            .map(MappedAction::mouse_click), // 构建鼠标点击动作
+        "mousetoggle" => mouse_button // 鼠标长按
+            .as_deref()
+            .and_then(mouse_button_from_name)
+            .map(MappedAction::mouse_toggle), // 构建鼠标长按动作
+        "wheelup" => Some(MappedAction::wheel_up()), // 滚轮上
+        "wheeldown" => Some(MappedAction::wheel_down()), // 滚轮下
+        "switchlayer" => layer_name.map(|n| MappedAction::switch_layer(&n)), // 切换层
+        "lookaround" => Some(MappedAction::look_around()), // 视角控制
+        "mousemove" => Some(MappedAction::mouse_move()), // 鼠标移动
+        "interactionkey" => Some(MappedAction::interaction_key()), // 交互键（需求1）
+        "releasemousetoggle" => Some(MappedAction::release_mouse_toggle()), // 释放鼠标锁存（需求4）
+        "swapmousetoggle" => Some(MappedAction::swap_mouse_toggle()), // 交换左右键锁存（需求5）
+        "finelook" => Some(MappedAction::fine_look()), // 精细移动（需求7）
+        _ => None, // 未知类型不生成动作
+    } // match 结束
 } // 函数结束
 
 // ---------------------------------------------------------------------
@@ -240,12 +307,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { // 主窗口整体
             active: core.steam.is_layer_active(&l.id), // 查询该层是否激活
         }) // 闭包返回 LayerInfo
         .collect(); // 收集为 Vec<LayerInfo>
-    let mouse_toggle = core // 当前鼠标长按锁存（取第一个）
-        .mapper // 访问键鼠执行器
-        .toggled_mouse_buttons // 长按锁存中的鼠标按钮集合（哈希表）
-        .values() // 【Rust 语法】values()：迭代哈希表所有值
-        .next() // 【Rust 语法】next()：取迭代器第一个元素，返回 Option
-        .map(|mb| format!("长按锁存: {}", mouse_button_display_name(*mb))); // 【Rust 语法】Option::map：Some 时用闭包转换，*mb 解引用
+    let mouse_toggle = core.mapper.lock_summary(); // 当前左右键锁存状态文案（需求1：左右键都判断）
     let gs = &core.steam.profile.global_settings; // 借用全局设置引用，避免重复写长路径
     Snapshot { // 构造快照结构体
         connected, // 连接状态
@@ -261,6 +323,8 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { // 主窗口整体
         look_smoothing: gs.look_smoothing, // 视角平滑
         look_acceleration: gs.look_acceleration, // 视角加速度
         overlay_opacity: gs.overlay_opacity,
+        wow_exe: gs.wow_exe.clone(), // 目标游戏 exe 路径
+        wow_exe_history: gs.wow_exe_history.clone(), // 历史路径列表
     } // Snapshot 字面量结束
 } // 函数结束
 
@@ -545,6 +609,8 @@ pub fn get_mapping(state: State<'_, AppState>, layer_id: String, button: String)
             has_mapping: true, // 标记有映射
             mouse_button: Some(m.action.mouse_button), // 鼠标键（Some 表示有，None 表示无）
             layer_name: m.action.layer_name.clone(), // 目标层名称（切换层动作时使用）
+            long_press: m.long_press.as_ref().map(|lp| action_view(lp, &m.long_press_subs)), // 长按动作视图
+            long_press_ms: m.long_press_ms, // 长按阈值
         }, // 视图构造结束
         None => MappingView::none(), // 无映射则返回空视图
     } // match 结束
@@ -564,40 +630,154 @@ pub fn set_mapping( // 写入按键映射命令（多参数，含多个可选参
     let Some(b) = controller_button_from_name(&button) else { // 按钮名转枚举
         return; // 无效则直接返回
     }; // let-else 结束
-    // 【Rust 语法】as_str()：String 转为 &str 供匹配；整个 match 结果是 Option<MappedAction>
-    let action: Option<MappedAction> = match kind.as_str() { // 按类型字符串构建动作
-        "keyboard" => key_code.map(MappedAction::keyboard_key), // 【Rust 语法】Option::map 传构造函数：键码存在则构建键盘动作
-        "mouse" => mouse_button // 鼠标点击分支
-            .as_deref() // 【Rust 语法】as_deref：Option<String> → Option<&str>
-            .and_then(mouse_button_from_name) // 【Rust 语法】and_then：扁平化 Option，解析失败则为 None
-            .map(MappedAction::mouse_click), // 构建鼠标点击动作
-        "mousetoggle" => mouse_button // 鼠标长按分支
-            .as_deref() // 转 &str
-            .and_then(mouse_button_from_name) // 解析按钮名
-            .map(MappedAction::mouse_toggle), // 构建鼠标长按动作
-        "wheelup" => Some(MappedAction::wheel_up()), // 滚轮上（无参数，直接 Some 包装）
-        "wheeldown" => Some(MappedAction::wheel_down()), // 滚轮下
-        "switchlayer" => layer_name.map(|n| MappedAction::switch_layer(&n)), // 【Rust 语法】闭包借用 n：构建切换层动作
-        "lookaround" => Some(MappedAction::look_around()), // 视角控制
-        "mousemove" => Some(MappedAction::mouse_move()), // 鼠标移动
-        _ => None, // 未知类型不生成动作
-    }; // match 结束
-    let Some(action) = action else { // 【Rust 语法】let-else：动作构建失败则返回
+    let Some(action) = build_action(&kind, key_code, mouse_button, layer_name) else { // 【Rust 语法】let-else：动作构建失败则返回
         return; // 无有效动作则直接返回
     }; // let-else 结束
     let mut core = state.shared.core.lock().unwrap(); // 加锁取可变访问
     if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) { // 【Rust 语法】if-let：可变借用配置查找层
-        // 写入动作时保留已有子命令
-        let subs = layer // 取原有子命令
-            .button_mappings // 按钮映射表
-            .get(&b) // 【Rust 语法】HashMap::get：按按钮查映射，返回 Option
-            .map(|m| m.sub_commands.clone()) // 有则复制其子命令
-            .unwrap_or_default(); // 无则用空列表
-        layer // 写回映射
-            .button_mappings // 按钮映射表
-            .insert(b, KeyMapping { action, sub_commands: subs }); // 【Rust 语法】HashMap::insert：写入/覆盖该按钮映射
-        core.profile_rev += 1; // 配置版本号自增，通知前端刷新
+        // 写入主动作时保留已有子命令与长按配置（长按独立配置，不因更换主动作而丢失）
+        let main_code = action.key_code; // 先取出键码，避免下面与动作移动冲突
+        if let Some(m) = layer.button_mappings.get_mut(&b) { // 已存在映射则原地更新
+            m.action = action; // 只替换主动作
+            m.sub_commands.retain(|k| *k != main_code); // 子命令与主动作重复时移除
+            core.profile_rev += 1; // 配置版本号自增，通知前端刷新
+        } else { // 无映射则新建
+            layer.button_mappings.insert(b, KeyMapping::new(action)); // 【Rust 语法】HashMap::insert：写入该按钮映射
+            core.profile_rev += 1; // 配置版本号自增
+        } // else 结束
     } // if-let 结束
+} // 函数结束
+
+// 长按动作配置：kind 为 None 表示取消长按
+#[tauri::command]
+pub fn set_long_press(
+    state: State<'_, AppState>,
+    layer_id: String,
+    button: String,
+    kind: Option<String>,
+    key_code: Option<i32>,
+    mouse_button: Option<String>,
+    layer_name: Option<String>,
+) {
+    let Some(b) = controller_button_from_name(&button) else {
+        return; // 按钮名无效
+    };
+    let action = kind.as_deref().and_then(|k| build_action(k, key_code, mouse_button, layer_name));
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
+        if let Some(m) = layer.button_mappings.get_mut(&b) { // 长按依附于已有主动作
+            let same_kind = match (&m.long_press, &action) { // 长按类型是否未变
+                (Some(old), Some(new)) => old.r#type == new.r#type, // 类型相同则保留子命令
+                _ => false, // 新建或取消时清空子命令
+            };
+            if let Some(a) = action {
+                m.long_press = Some(a); // 写入长按动作
+                if !same_kind {
+                    m.long_press_subs.clear(); // 类型变化时清空长按子命令
+                }
+            } else {
+                m.long_press = None; // 取消长按
+                m.long_press_subs.clear(); // 清理长按子命令
+            }
+            core.profile_rev += 1;
+        }
+    }
+} // 函数结束
+
+// 设置长按判定阈值（毫秒，限幅 100~5000）
+#[tauri::command]
+pub fn set_long_press_ms(state: State<'_, AppState>, layer_id: String, button: String, ms: u32) {
+    let Some(b) = controller_button_from_name(&button) else {
+        return;
+    };
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
+        if let Some(m) = layer.button_mappings.get_mut(&b) {
+            m.long_press_ms = ms.clamp(100, 5000); // 阈值限幅
+            core.profile_rev += 1;
+        }
+    }
+} // 函数结束
+
+// 切换长按动作的子命令（仅长按已配置时有效）
+#[tauri::command]
+pub fn toggle_long_press_sub(state: State<'_, AppState>, layer_id: String, button: String, key_code: i32) {
+    let Some(b) = controller_button_from_name(&button) else {
+        return;
+    };
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
+        if let Some(m) = layer.button_mappings.get_mut(&b) {
+            if m.long_press.is_some() {
+                if let Some(pos) = m.long_press_subs.iter().position(|&k| k == key_code) {
+                    m.long_press_subs.remove(pos); // 已存在则移除（取消勾选）
+                } else if m.long_press_subs.len() < KeyMapping::MAX_SUB_COMMANDS {
+                    m.long_press_subs.push(key_code); // 未满则追加
+                }
+                core.profile_rev += 1;
+            }
+        }
+    }
+} // 函数结束
+
+// ---------------------------------------------------------------------
+// 目标游戏（WoW）exe 选择
+// ---------------------------------------------------------------------
+/// 弹出系统文件选择对话框，返回选中的 exe 完整路径
+fn pick_exe_dialog() -> Option<String> {
+    use std::mem::size_of;
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, OPENFILENAMEW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
+        OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
+    };
+
+    let mut buf = [0u16; 1024]; // 存放用户选择的路径
+    // 过滤器字符串：成对出现（显示名 \0 通配符 \0），最后以空串结尾
+    let filter: Vec<u16> = "可执行文件 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let title: Vec<u16> = "选择游戏可执行文件".encode_utf16().chain([0u16]).collect();
+
+    let mut ofn = OPENFILENAMEW::default();
+    ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+    ofn.lpstrFilter = PCWSTR(filter.as_ptr());
+    ofn.lpstrFile = PWSTR(buf.as_mut_ptr());
+    ofn.nMaxFile = buf.len() as u32;
+    ofn.lpstrTitle = PCWSTR(title.as_ptr());
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY;
+
+    if !unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+        return None; // 用户取消
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..len]))
+} // 函数结束
+
+/// 写入目标 exe 并维护历史记录（最近使用优先，最多 10 条）
+fn apply_wow_exe(core: &mut crate::core::AppCore, path: &str) {
+    let gs = &mut core.steam.profile.global_settings;
+    gs.wow_exe = path.to_string();
+    gs.wow_exe_history.retain(|p| p != path); // 去重
+    gs.wow_exe_history.insert(0, path.to_string()); // 最近使用排最前
+    gs.wow_exe_history.truncate(10); // 限制条数
+    core.profile_rev += 1;
+} // 函数结束
+
+// 浏览选择 WoW exe（成功后自动写入并加入历史）
+#[tauri::command]
+pub fn pick_wow_exe(state: State<'_, AppState>) -> Option<String> {
+    let path = pick_exe_dialog()?; // 弹出对话框；取消则返回 None
+    let mut core = state.shared.core.lock().unwrap();
+    apply_wow_exe(&mut core, &path);
+    Some(path)
+} // 函数结束
+
+// 从历史记录中选择 WoW exe
+#[tauri::command]
+pub fn set_wow_exe(state: State<'_, AppState>, path: String) {
+    let mut core = state.shared.core.lock().unwrap();
+    apply_wow_exe(&mut core, &path);
 } // 函数结束
 
 // 【Rust 语法】属性宏 #[tauri::command]：注册为 Tauri IPC 命令

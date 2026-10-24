@@ -33,6 +33,8 @@ pub enum SourceEvent {
     Button(ControllerButton, bool), // 变体：携带按钮枚举与按下状态 bool
     /// 摇杆输入（x,y 归一化到 [-1,1]，未应用死区）
     Stick(ControllerStick, f32, f32), // 变体：携带摇杆枚举与 x、y 两个归一化浮点坐标
+    /// 轮询心跳（每次成功轮询末尾发出，用于驱动长按计时判定）
+    Tick, // 变体：不携带数据
 }
 
 /// 手柄源事件回调（上层为 AppCore 的共享锁）
@@ -165,6 +167,7 @@ impl Poller {
                 axis_to_float(pad.sThumbRX), // x 轴：原始短整数转归一化浮点
                 axis_to_float(pad.sThumbRY), // y 轴：原始短整数转归一化浮点
             )); // 右摇杆事件调用结束
+            (self.callback)(SourceEvent::Tick); // 每次成功轮询末尾发出心跳（驱动长按计时）
         } else { // 读取失败走此分支
             // ---- 读取失败（可能短暂抖动，也可能真正断开）----
             self.connection_fail_count += 1; // 失败计数加一

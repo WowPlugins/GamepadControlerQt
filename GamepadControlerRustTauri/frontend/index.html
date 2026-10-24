@@ -41,6 +41,12 @@
         <div id="info-col" style="display:flex;flex-direction:column;gap:2px;"></div> <!-- 当前操作集/层/锁存信息（动态渲染） -->
         <div class="dim">全局设置</div> <!-- 设置区标题 -->
         <div id="settings-col" style="display:flex;flex-direction:column;gap:8px;"></div> <!-- 全局设置调整行（动态渲染） -->
+        <div class="dim">目标游戏（WASD 直发）</div> <!-- 目标游戏区标题 -->
+        <div class="wow-row"> <!-- 目标 exe 选择行 -->
+          <select id="wow-exe-select" class="select" aria-label="选择目标游戏可执行文件"></select> <!-- 历史路径下拉框（index.js 动态渲染） -->
+          <button class="btn" id="btn-wow">浏览…</button> <!-- 打开系统文件选择对话框 -->
+        </div>
+        <div id="wow-exe-current" class="faint"></div> <!-- 当前目标 exe 路径（动态刷新） -->
         <div class="dim">悬浮窗</div> <!-- 悬浮窗设置区标题 -->
         <div class="slider-row"> <!-- 透明度调整行 -->
           <div class="slider-label">透明度</div> <!-- 名称 -->

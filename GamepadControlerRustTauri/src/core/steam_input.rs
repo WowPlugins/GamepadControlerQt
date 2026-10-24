@@ -36,7 +36,10 @@ pub enum ButtonDispatch {
     Execute {
         is_pressed: bool, // 是否按下
         mapping: KeyMapping, // 需要执行注入的键映射
+        layer_id: String, // 映射命中的层 id（需求6：记录鼠标锁存来源层）
     },
+    /// 松开激活层的按钮：该层已停用，需释放该层内产生的鼠标左右键锁存（需求6）
+    DeactivateLayer(String),
     /// 切换映射启停请求（ToggleMapping）
     ToggleMapping, // 切换映射启停请求
     /// 切换屏幕键盘请求（ToggleOnScreenKeyboard）
@@ -194,17 +197,26 @@ impl SteamInput {
     /// 从最后激活的操作层开始，逐层回退到公共层，返回第一个命中。
     // 【Rust 语法】返回类型 Option<KeyMapping>：可能为 Some(映射) 或 None（无映射）；调用方用模式匹配解包。
     pub fn get_effective_mapping(&self, button: ControllerButton) -> Option<KeyMapping> { // 查询有效映射
+        self.get_effective_mapping_with_layer(button) // 复用带层 id 的查询，丢弃层 id
+            .map(|(m, _)| m) // 【Rust 语法】Option::map：取出元组中的映射部分
+    } // 方法结束
+
+    /// 同 get_effective_mapping，但额外返回命中映射所在的层 id（需求6 记录鼠标锁存来源层）。
+    pub fn get_effective_mapping_with_layer(
+        &self,
+        button: ControllerButton,
+    ) -> Option<(KeyMapping, String)> {
         for id in self.active_layers.iter().rev() { // 【Rust 语法】.rev() 反转迭代器（从最后激活的层/栈顶开始）；for 循环遍历
             if let Some(layer) = self.profile.find_layer(id) { // 【Rust 语法】if let 模式匹配：若 find_layer 返回 Some 则解包为 layer 进入分支；None 则跳过
                 if let Some(m) = layer.get_mapping(button) { // 若该层存在此按钮的映射
-                    return Some(m.clone()); // 【Rust 语法】Some(...) 构造 Some 变体；.clone() 深拷贝数据（返回拥有所有权的值）
+                    return Some((m.clone(), id.clone())); // 同时返回映射与层 id
                 } // 命中分支结束
             } // 层存在分支结束
         } // 循环结束
         self.profile // 操作层栈未命中，回退到公共层
             .common_layer() // 获取公共层（返回 Option<&OperationLayer>）
             .and_then(|cl| cl.get_mapping(button)) // 【Rust 语法】Option::and_then(闭包)：Some 时调用闭包（闭包也返回 Option），并自动扁平化嵌套的 Option
-            .cloned() // 【Rust 语法】Option::cloned()：把 Option<&T> 转为 Option<T>（对内部引用执行 Clone，得到拥有所有权的值）
+            .map(|m| (m.clone(), "Common".to_string())) // 公共层映射的来源层记为 Common
     } // 方法结束
 
     // -----------------------------------------------------------------
@@ -220,31 +232,29 @@ impl SteamInput {
             self.held_buttons.remove(&button); // 从按持集合移除
         } // 分支结束
 
-        // 松开时：若该按键激活了某个层，停用该层并返回（不触发映射）
+        // 松开时：若该按键激活了某个层，停用该层并通知映射器释放该层内产生的鼠标锁存
         if !is_pressed { // 仅在松开时处理层停用
             if let Some(triggered_id) = self.button_triggered_layers.remove(&button) { // 【Rust 语法】HashMap::remove 返回 Option<V>；
             // if let Some(...) 解包：若该按钮之前激活过某层则取出其 id。
                 self.deactivate_layer(&triggered_id); // 停用该按钮激活的层
-                return ButtonDispatch::None; // 层切换逻辑已由引擎处理，返回无动作（不触发映射注入）
+                return ButtonDispatch::DeactivateLayer(triggered_id); // 通知映射器释放该层内产生的鼠标左右键锁存（需求6）
             } // 触发层分支结束
         } // 松开分支结束
 
         // 查询当前层栈下的有效映射；无映射则不产生任何事件
-        let Some(mapping) = self.get_effective_mapping(button) else { // 【Rust 语法】let-else 语句：若 Option 为 Some 则解包为 mapping 继续执行；
+        let Some((mapping, layer_id)) = self.get_effective_mapping_with_layer(button) else { // 【Rust 语法】let-else 语句：若 Option 为 Some 则解包为 mapping/layer_id 继续执行；
         // 若为 None 则必须执行 else 块并离开（此处 else 块内用 return 返回）。
             // 松开时：即使该按钮在「松开时刻」的层栈下已无映射，仍要广播松开事件，
             // 让映射器按「已注入状态」精确释放（防止此前注入的按键卡死）。
             if !is_pressed { // 松开场景
                 return ButtonDispatch::Execute { // 返回执行事件
                     is_pressed, // 【Rust 语法】字段简写：is_pressed: is_pressed
-                    mapping: KeyMapping { // 构造一个虚拟映射
-                        action: crate::core::mapping_types::MappedAction::mouse_move(), // 【Rust 语法】全路径调用关联函数：构造「鼠标移动」空动作
-                        sub_commands: vec![], // 【Rust 语法】vec![] 宏：创建空 Vec
-                    }, // KeyMapping 构造结束
+                    mapping: KeyMapping::new(crate::core::mapping_types::MappedAction::mouse_move()), // 虚拟空动作（仅用于触发精确释放）
+                    layer_id: String::new(), // 无映射来源层
                 }; // Execute 变体构造结束
             } // 松开分支结束
             return ButtonDispatch::None; // 按下且无映射：无动作
-        }; // 【Rust 语法】let-else 结束：此语句之后 mapping 已绑定为有效映射
+        }; // 【Rust 语法】let-else 结束：此语句之后 mapping / layer_id 已绑定
 
         // 切换层动作由引擎处理：按住激活目标层并记录触发按钮
         if mapping.action.r#type == ActionType::SwitchLayer { // 【Rust 语法】r#type 原始标识符访问字段（type 是关键字）；== 比较枚举值
@@ -289,6 +299,7 @@ impl SteamInput {
         ButtonDispatch::Execute { // 返回执行事件
             is_pressed, // 字段简写
             mapping, // 字段简写：把查询到的映射交给映射器
+            layer_id, // 映射命中层 id（需求6）
         } // Execute 变体构造结束
     } // 方法结束
 

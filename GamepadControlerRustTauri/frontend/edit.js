@@ -64,6 +64,7 @@ const SUB_COMMAND_KEYS = [
 
 // KINDS：动作类型列表，[后端枚举名, 中文显示名]
 const KINDS = [
+  ['none', '未设置'], // 未设置：清除该按键的映射（含长按）
   ['keyboard', '键盘'], // 键盘按键
   ['mouse', '鼠标点击'], // 鼠标点击
   ['mousetoggle', '鼠标长按'], // 鼠标长按锁存
@@ -72,7 +73,14 @@ const KINDS = [
   ['switchlayer', '切层'], // 切换层
   ['lookaround', '视角控制'], // 右摇杆视角控制
   ['mousemove', '鼠标移动'], // 鼠标移动
+  ['interactionkey', '交互键'], // 交互键：临时解锁锁存，屏幕中央左右键各点一次
+  ['releasemousetoggle', '释放鼠标锁存'], // 释放鼠标左右键长按锁存
+  ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
+  ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
 ];
+
+// LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理，未设置无长按，均不能作为长按动作）
+const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'none');
 
 // MOUSE_BUTTONS：可映射的鼠标按键列表，[枚举名, 中文显示名]
 const MOUSE_BUTTONS = [
@@ -84,7 +92,7 @@ const MOUSE_BUTTONS = [
 ];
 
 // NO_TARGET_KINDS：无需选择额外目标的动作类型，选中即生效
-const NO_TARGET_KINDS = ['wheelup', 'wheeldown', 'lookaround', 'mousemove'];
+const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook'];
 
 // ---------------------------------------------------------------------
 // 工具
@@ -110,7 +118,9 @@ function $(id) { return document.getElementById(id); }
 // ---------------------------------------------------------------------
 let editLayerId = decodeURIComponent(location.hash.replace(/^#/, '')) || 'Common'; // 当前编辑的层 id，默认公共层
 let selectedButton = 'A'; // 当前选中的手柄按键
-let editKind = 'keyboard'; // 当前选中的动作类型
+let editKind = 'none'; // 当前选中的动作类型（无映射时为"未设置"）
+let editLongKind = null; // 当前选中的长按动作类型（null = 未配置长按）
+let currentLongPressMs = 500; // 当前按键的长按判定阈值（毫秒，用于加减按钮）
 let prevEdit = null; // 上一次渲染内容对比串，避免重复渲染
 let prevSelectKey = null; // 上一次「激活按钮」下拉框内容指纹，避免重建 DOM 把展开中的下拉框重置
 let renameLayerMode = false; // 是否正在重命名操作集
@@ -122,12 +132,14 @@ listen('edit-layer', (e) => { // 注册 edit-layer 事件监听
   const id = (e.payload && e.payload.layerId) || 'Common'; // 读取事件携带的层 id，缺省为公共层
   editLayerId = id; // 更新当前编辑的层 id
   selectedButton = 'A'; // 重置选中按键为 A
-  editKind = 'keyboard'; // 重置动作类型为键盘
+  editKind = 'none'; // 重置动作类型为未设置
+  editLongKind = null; // 重置长按动作类型为未配置
   prevEdit = null; // 清空对比串，强制下一轮重新渲染
   prevSelectKey = null; // 清空下拉框指纹，切换层后强制重建选项
   // 读取新层 A 键的现有映射类型
   invoke('get_mapping', { layerId: id, button: 'A' }).then((map) => { // 查询 A 键当前映射
-    if (map.has_mapping) editKind = map.kind; // 若已有映射则按原类型显示
+    if (map.has_mapping) editKind = map.kind; else editKind = 'none'; // 有映射则按原类型显示，否则为未设置
+    editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
     prevEdit = null; // 再次强制下一轮重新渲染
   });
 });
@@ -197,7 +209,7 @@ function renderEdit(info, map) {
   ).join('');
 
   // 目标区
-  $('edit-target').innerHTML = targetHTML(info, map); // 按动作类型渲染目标选择区
+  $('edit-target').innerHTML = targetHTML(info, editKind, map); // 按动作类型渲染目标选择区
 
   // 子命令（键盘/滚轮动作提供组合键；其余动作类型不提供）
   const showSubs = editKind === 'keyboard' || editKind === 'wheelup' || editKind === 'wheeldown'; // 是否显示子命令区（键盘/滚轮支持组合键）
@@ -212,29 +224,79 @@ function renderEdit(info, map) {
     $('edit-subs-label').textContent = // 子命令标题，显示当前已选数量
       '子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
   }
+
+  renderLongPress(info, map); // 渲染长按动作配置区（需求2）
 }
 
-// targetHTML：根据当前动作类型返回目标选择区 HTML
-function targetHTML(info, map) {
-  if (editKind === 'keyboard') { // 键盘动作 → 显示按键选择
+// renderLongPress：渲染「长按动作」配置区（仅在当前按键已有主动作时可用）
+function renderLongPress(info, map) {
+  const hasMapping = map.has_mapping && editKind !== 'none'; // 无主动作（或已选未设置）时长按无依附对象
+  const lp = map.long_press || null; // 已配置的长按动作（ActionView）或 null
+  $('edit-long-label').style.display = hasMapping ? '' : 'none'; // 标题显隐
+  $('edit-long-kinds').style.display = hasMapping ? '' : 'none'; // 类型 chips 显隐
+  $('edit-long-target').style.display = hasMapping ? '' : 'none'; // 目标区显隐
+  $('edit-long-subs-label').style.display = 'none'; // 先隐藏，下面按条件显示
+  $('edit-long-subs').style.display = 'none';
+  $('edit-long-ms-row').style.display = lp ? '' : 'none'; // 阈值行仅在已配置长按时显示
+  $('edit-long-clear').style.display = lp ? '' : 'none'; // 取消长按按钮仅在已配置时显示
+  if (!hasMapping) return; // 无主动作则整块隐藏
+
+  // 长按动作类型 chips
+  $('edit-long-kinds').innerHTML = LONG_PRESS_KINDS.map(([k, label]) => // 遍历可选类型
+    '<div class="chip' + (k === editLongKind ? ' active' : '') + '" ' + // 当前类型加 active
+    'onclick="App.setLongKind(' + q(k) + ')">' + label + '</div>' // 点击切换长按类型
+  ).join('');
+
+  // 长按目标区：未选类型时给出提示
+  $('edit-long-target').innerHTML = editLongKind
+    ? targetHTML(info, editLongKind, lp || {}, true) // 复用目标选择区，长按样式
+    : '<div class="faint">选择长按动作类型后配置目标；未选择则无长按</div>';
+
+  // 长按子命令（仅键盘/滚轮且已配置长按时显示）
+  const showLongSubs = lp && (editLongKind === 'keyboard' || editLongKind === 'wheelup' || editLongKind === 'wheeldown');
+  $('edit-long-subs-label').style.display = showLongSubs ? '' : 'none';
+  $('edit-long-subs').style.display = showLongSubs ? '' : 'none';
+  if (showLongSubs) {
+    const longSubSet = new Set(lp.subs); // 已勾选的长按子命令
+    $('edit-long-subs').innerHTML = SUB_COMMAND_KEYS.map(([code, label]) =>
+      '<div class="chip sub' + (longSubSet.has(label) ? ' active' : '') + '" ' +
+      'onclick="App.toggleLongSub(' + code + ')">' + label + '</div>'
+    ).join('');
+    $('edit-long-subs-label').textContent =
+      '长按子命令（最多3个，当前: ' + (lp.subs.length ? lp.subs.join(' + ') : '无子命令') + '）';
+  }
+
+  currentLongPressMs = map.long_press_ms || 500; // 记录当前阈值，供加减按钮计算
+  $('edit-long-ms').textContent = currentLongPressMs + 'ms'; // 显示长按阈值
+}
+
+// targetHTML：根据动作类型返回目标选择区 HTML
+// kind：动作类型；act：动作视图（含 key_code / mouse_button / layer_name）；isLong：是否为长按动作
+function targetHTML(info, kind, act, isLong) {
+  const a = act || {}; // 防御：未配置时视为空对象
+  const preset = isLong ? 'Long' : ''; // 长按使用独立的处理器前缀（setLongKey / setLongMouse / setLongLayer）
+  if (kind === 'none') { // 未设置：无主动作可配置
+    return '<div class="faint">未设置：当前按键无映射，选择其他类型后即可配置</div>';
+  }
+  if (kind === 'keyboard') { // 键盘动作 → 显示按键选择
     return '<div class="dim">选择按键</div><div class="chips-row">' +
       COMMON_KEYS.map(([code, label]) => // 遍历按键生成 chip
-        '<div class="chip ' + (code === map.key_code ? ' active' : '') + '" ' + // 当前按键加 active 高亮
-        'onclick="App.setKey(' + code + ')">' + label + '</div>' // 点击设置键盘映射（数字实参）
+        '<div class="chip ' + (code === a.key_code ? ' active' : '') + '" ' + // 当前按键加 active 高亮
+        'onclick="App.set' + preset + 'Key(' + code + ')">' + label + '</div>' // 点击设置键盘映射（数字实参）
       ).join('') + '</div>';
   }
-  if (editKind === 'mouse' || editKind === 'mousetoggle') { // 鼠标动作 → 显示鼠标键选择
+  if (kind === 'mouse' || kind === 'mousetoggle') { // 鼠标动作 → 显示鼠标键选择
     return '<div class="dim">选择鼠标键</div><div class="chips-row">' +
       MOUSE_BUTTONS.map(([name, label]) => // 遍历鼠标键生成 chip
-        '<div class="chip' + (name.toLowerCase() === map.mouse_button?.toLowerCase() ? ' active' : '') + '" ' + // 当前鼠标键加 active 高亮
-        'onclick="App.setMouse(' + q(name) + ')">' + label + '</div>' // 点击设置鼠标映射（单引号实参）
+        '<div class="chip' + (name.toLowerCase() === (a.mouse_button || '').toLowerCase() ? ' active' : '') + '" ' + // 当前鼠标键加 active 高亮
+        'onclick="App.set' + preset + 'Mouse(' + q(name) + ')">' + label + '</div>' // 点击设置鼠标映射（单引号实参）
       ).join('') + '</div>';
   }
-  if (editKind === 'switchlayer') { // 切层动作 → 显示目标层选择
+  if (kind === 'switchlayer') { // 切层动作 → 显示目标层选择
     return '<div class="dim">选择目标层</div><div class="chips-row">' +
       info.switch_targets.map((t) => // 遍历可切换的目标层生成 chip
-        '<div class="chip' + (t.name.toLowerCase() === map.layer_name?.toLowerCase() ? ' active' : '') + '" ' + // 当前目标层加 active 高亮
-        'onclick="App.setLayer(' + q(t.name) + ')">' + esc(t.display) + '</div>' // 点击设置切层映射
+        '<div class="chip' + (t.name.toLowerCase() === (a.layer_name || '').toLowerCase() ? ' active' : '') + '" ' + // 当前目标层加 active 高亮
+        'onclick="App.set' + preset + 'Layer(' + q(t.name) + ')">' + esc(t.display) + '</div>' // 点击设置切层映射
       ).join('') + '</div>';
   }
   return '<div class="faint">该动作无需额外目标，点击上方类型即生效</div>'; // 无需目标的动作提示
@@ -248,13 +310,16 @@ const App = {
   selectButton(name) { // 切换选中手柄按键
     selectedButton = name; // 更新选中按键
     invoke('get_mapping', { layerId: editLayerId, button: name }).then((map) => { // 查询新按键的映射
-      editKind = map.has_mapping ? map.kind : 'keyboard'; // 有映射则按其类型显示，否则默认键盘
+      editKind = map.has_mapping ? map.kind : 'none'; // 有映射则按其类型显示，否则显示未设置
+      editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
       prevEdit = null; // 强制下一轮重新渲染
     });
   },
   setKind(k) { // 切换动作类型
     editKind = k; // 更新动作类型
-    if (NO_TARGET_KINDS.includes(k)) { // 若该类型无需额外目标则直接生效
+    if (k === 'none') { // 未设置：清除该按键的映射（含长按与子命令）
+      invoke('clear_mapping', { layerId: editLayerId, button: selectedButton });
+    } else if (NO_TARGET_KINDS.includes(k)) { // 若该类型无需额外目标则直接生效
       invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: null }); // 直接写入映射
     }
     prevEdit = null; // 强制下一轮重新渲染
@@ -273,6 +338,37 @@ const App = {
   },
   toggleSub(code) { // 切换子命令（追加/移除）
     invoke('toggle_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
+  },
+  // ---- 长按动作（需求2） ----
+  setLongKind(k) { // 切换长按动作类型
+    editLongKind = k; // 更新长按类型
+    if (NO_TARGET_KINDS.includes(k)) { // 无需额外目标则直接写入
+      invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: null });
+    }
+    prevEdit = null; // 强制重新渲染
+  },
+  setLongKey(code) { // 设置长按键盘动作
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'keyboard', keyCode: code, mouseButton: null, layerName: null });
+  },
+  setLongMouse(name) { // 设置长按鼠标动作
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: editLongKind, mouseButton: name, keyCode: null, layerName: null });
+  },
+  setLongLayer(name) { // 设置长按切层动作
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'switchlayer', layerName: name, keyCode: null, mouseButton: null });
+  },
+  toggleLongSub(code) { // 切换长按子命令
+    invoke('toggle_long_press_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
+  },
+  adjustLongMs(delta) { // 调整长按阈值（步长 50ms，限幅 100~5000）
+    const next = Math.min(5000, Math.max(100, currentLongPressMs + delta)); // 计算新阈值
+    currentLongPressMs = next; // 记录到前端状态
+    $('edit-long-ms').textContent = next + 'ms'; // 立即更新显示
+    invoke('set_long_press_ms', { layerId: editLayerId, button: selectedButton, ms: next }); // 通知后端
+  },
+  clearLongPress() { // 取消长按动作
+    editLongKind = null; // 清空前端类型
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: null, keyCode: null, mouseButton: null, layerName: null });
+    prevEdit = null; // 强制重新渲染
   },
   close() { getCurrentWindow().close(); }, // 关闭本窗口
   renameLayer() {
@@ -327,6 +423,7 @@ $('rename-layer-ok').addEventListener('click', () => App.renameLayerOk()); // �
 $('rename-layer-cancel').addEventListener('click', () => App.renameLayerCancel()); // 取消重命名按钮，点击后隐藏输入行
 $('edit-close').addEventListener('click', () => App.close()); // 关闭按钮
 $('edit-clear').addEventListener('click', () => App.clearMapping()); // 清除映射按钮
+$('edit-long-clear').addEventListener('click', () => App.clearLongPress()); // 取消长按动作按钮
 $('edit-layer-select').addEventListener('change', (e) => App.layerActiveButton(editLayerId, e.target.value));
 
 document.addEventListener('pointerdown', (e) => { // 监听指针按下（事件委托，适用于动态生成的元素）

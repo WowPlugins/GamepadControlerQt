@@ -40,6 +40,10 @@ pub enum ActionType {
     ToggleMapping, // 切换映射总开关
     ToggleOnScreenKeyboard, // 切换屏幕键盘
     ToggleOverlay, // 切换悬浮窗
+    InteractionKey, // 交互键（临时解锁鼠标锁存 -> 屏幕中心左右键点击 -> 恢复）
+    ReleaseMouseToggle, // 释放鼠标左右键长按锁存
+    SwapMouseToggle, // 交换鼠标左右键长按锁存
+    FineLook, // 鼠标精细移动（右摇杆低灵敏度，按住生效）
 } // 结束 ActionType 枚举定义
 
 // MappedAction 含 Option<String>（layer_name），不能 Copy，只 Clone。
@@ -146,6 +150,38 @@ impl MappedAction {
             layer_name: None, // 无层切换
         } // 结束 Self 结构体字面量
     } // 结束 toggle_overlay 函数
+    pub fn interaction_key() -> Self { // 构造"交互键"动作
+        Self {
+            r#type: ActionType::InteractionKey,
+            key_code: 0,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
+    pub fn release_mouse_toggle() -> Self { // 构造"释放鼠标锁存"动作
+        Self {
+            r#type: ActionType::ReleaseMouseToggle,
+            key_code: 0,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
+    pub fn swap_mouse_toggle() -> Self { // 构造"交换鼠标左右键锁存"动作
+        Self {
+            r#type: ActionType::SwapMouseToggle,
+            key_code: 0,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
+    pub fn fine_look() -> Self { // 构造"鼠标精细移动"动作
+        Self {
+            r#type: ActionType::FineLook,
+            key_code: 0,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
 } // 结束 impl MappedAction 块
 
 // ---------------------------------------------------------------------
@@ -155,15 +191,46 @@ impl MappedAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // 【Rust 语法】struct 结构体：单个按键的完整映射定义（主动作 + 若干附加子命令键）。
 pub struct KeyMapping {
-    pub action: MappedAction, // 主要动作
+    pub action: MappedAction, // 主要动作（按下立即执行）
     // 【Rust 语法】Vec<i32> 为动态可变长度数组（向量）；此处存放组合键的附加键码。
     pub sub_commands: Vec<i32>, // Android KeyCode，最多 MAX_SUB_COMMANDS 个
+    /// 长按动作：按住超过 long_press_ms 后替换主动作（None 表示不支持长按）
+    pub long_press: Option<MappedAction>,
+    /// 长按动作的子命令
+    pub long_press_subs: Vec<i32>,
+    /// 长按判定阈值（毫秒），默认 500
+    pub long_press_ms: u32,
 } // 结束 KeyMapping 结构体定义
+
+impl Default for KeyMapping {
+    fn default() -> Self {
+        Self {
+            action: MappedAction::mouse_move(),
+            sub_commands: Vec::new(),
+            long_press: None,
+            long_press_subs: Vec::new(),
+            long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS,
+        }
+    }
+}
 
 // 【Rust 语法】impl 块：为 KeyMapping 实现方法。
 impl KeyMapping {
     // 【Rust 语法】关联常量：与类型绑定、不属于某个实例的常量，通过 `KeyMapping::MAX_SUB_COMMANDS` 访问。
     pub const MAX_SUB_COMMANDS: usize = 3;
+    /// 长按判定默认阈值（毫秒）
+    pub const DEFAULT_LONG_PRESS_MS: u32 = 500;
+
+    /// 构造一条只有主动作的映射
+    pub fn new(action: MappedAction) -> Self {
+        Self {
+            action,
+            sub_commands: Vec::new(),
+            long_press: None,
+            long_press_subs: Vec::new(),
+            long_press_ms: Self::DEFAULT_LONG_PRESS_MS,
+        }
+    }
 
     /// 生成可读描述字符串，如 "W+ALT"
     // 【Rust 语法】方法定义：`&self` 表示对自身实例的不可变借用（只读访问，不转移所有权）。
@@ -183,6 +250,10 @@ impl KeyMapping {
             ActionType::ToggleMapping => parts.push("切换映射".to_string()), // 切换映射描述
             ActionType::ToggleOnScreenKeyboard => parts.push("切换屏幕键盘".to_string()), // 切换屏幕键盘描述
             ActionType::ToggleOverlay => parts.push("切换悬浮窗".to_string()), // 切换悬浮窗描述
+            ActionType::InteractionKey => parts.push("交互键".to_string()), // 交互键描述
+            ActionType::ReleaseMouseToggle => parts.push("释放鼠标锁存".to_string()), // 释放锁存描述
+            ActionType::SwapMouseToggle => parts.push("交换鼠标左右键锁存".to_string()), // 交换锁存描述
+            ActionType::FineLook => parts.push("鼠标精细移动".to_string()), // 精细移动描述
         } // 结束 match 表达式
         // 【Rust 语法】for ... in 循环：`&self.sub_commands` 是对数组的不可变借用（不转移所有权），每次迭代 `sub` 绑定为元素引用 &i32。
         for sub in &self.sub_commands {
@@ -252,6 +323,10 @@ pub struct GlobalSettings {
     pub release_on_foreground_change: bool, // 前台窗口切换时是否自动释放按键
     pub confirm_on_close: bool, // 关闭程序时是否弹出确认框
     pub overlay_opacity: f32, // 悬浮窗的明度
+    /// 目标游戏（WoW）可执行文件路径：WASD 拦截后按键直接投递给该进程
+    pub wow_exe: String,
+    /// 历史选择过的 WoW 可执行文件路径（最近优先，数量有限）
+    pub wow_exe_history: Vec<String>,
 } // 结束 GlobalSettings 结构体定义
 
 // 【Rust 语法】为 GlobalSettings 实现 Default trait（特性）：提供一套默认值，之后可用 `GlobalSettings::default()` 便捷创建实例。
@@ -273,6 +348,8 @@ impl Default for GlobalSettings {
             release_on_foreground_change: true, // 默认前台切换时释放按键
             confirm_on_close: true, // 默认关闭时需确认
             overlay_opacity: 0.8, // 悬浮窗透明度默认 0.8
+            wow_exe: String::new(), // 默认未选择目标程序
+            wow_exe_history: Vec::new(), // 默认无历史记录
         } // 结束 Self 结构体字面量
     } // 结束 default 函数
 } // 结束 impl Default for GlobalSettings 块
@@ -462,53 +539,32 @@ impl ControllerProfile {
         // ---- 公共层默认映射 ----
         common.button_mappings.insert( // 【Rust 语法】HashMap::insert(键, 值)：向映射表插入一对键值
             ControllerButton::A, // A 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::keyboard_key(android_key::SPACE), // A 键 -> 键盘空格键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::keyboard_key(android_key::SPACE)), // A 键 -> 键盘空格键
         ); // 结束 insert 调用
         common.button_mappings.insert( // 插入 B 键映射
             ControllerButton::B, // B 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::mouse_click(MouseButton::Right), // B 键 -> 鼠标右键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::mouse_click(MouseButton::Right)), // B 键 -> 鼠标右键
         ); // 结束 insert 调用
         common.button_mappings.insert( // 插入 X 键映射
             ControllerButton::X, // X 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::mouse_click(MouseButton::Left), // X 键 -> 鼠标左键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::mouse_click(MouseButton::Left)), // X 键 -> 鼠标左键
         ); // 结束 insert 调用
         common.button_mappings.insert( // 插入 Y 键映射
             ControllerButton::Y, // Y 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::keyboard_key(android_key::I), // Y 键 -> 键盘 I 键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::keyboard_key(android_key::I)), // Y 键 -> 键盘 I 键
         ); // 结束 insert 调用
         common.button_mappings.insert( // 插入 Menu 键映射
             ControllerButton::Menu, // Menu 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::keyboard_key(android_key::ESCAPE), // Menu 键 -> ESC 键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::keyboard_key(android_key::ESCAPE)), // Menu 键 -> ESC 键
         ); // 结束 insert 调用
         common.button_mappings.insert( // 插入 Options 键映射
             ControllerButton::Options, // Options 键
-            KeyMapping { // 构造按键映射
-                action: MappedAction::keyboard_key(android_key::M), // Options 键 -> M 键
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::keyboard_key(android_key::M)), // Options 键 -> M 键
         ); // 结束 insert 调用
         // 右摇杆按压 -> 视角控制
         common.button_mappings.insert( // 插入右摇杆按压映射
             ControllerButton::RightStickClick, // 右摇杆按压
-            KeyMapping { // 构造按键映射
-                action: MappedAction::look_around(), // 右摇杆按压 -> 视角控制
-                sub_commands: vec![], // 无子命令
-            }, // 结束 KeyMapping
+            KeyMapping::new(MappedAction::look_around()), // 右摇杆按压 -> 视角控制
         ); // 结束 insert 调用
         p // 【Rust 语法】最后一个表达式 p 作为函数返回值
     } // 结束 create_default 函数

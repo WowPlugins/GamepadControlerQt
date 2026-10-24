@@ -44,6 +44,7 @@ let activeSetId = '';          // 当前激活操作集 id
 let activeSetName = '';        // 当前激活操作集名称
 let running = false;           // 映射是否正在运行（决定开始/停止按钮行为）
 let overlayOpacity = null;     // 悬浮窗透明度（0.2 ~ 1.0），与后端一致
+let prevWowKey = null;         // 上一次目标 exe 下拉框指纹，避免轮询重建把展开中的下拉框重置
 
 let prevMain = null;           // 上一次渲染的快照 JSON 串，用于对比避免重复渲染
 
@@ -122,6 +123,21 @@ function renderMain(snap) {
     '<button class="mini" onclick="App.adjust(\'' + key + '\',0.01)">+</button>' + // 增大按钮
     '</div>'
   ).join('');
+
+  // 目标游戏 exe（下拉框仅在内容变化时重建，避免展开中被轮询刷新关闭）
+  const wowHistory = snap.wow_exe_history || []; // 历史路径列表
+  const wowKey = (snap.wow_exe || '') + '|' + wowHistory.join(';'); // 指纹
+  if (wowKey !== prevWowKey) { // 内容变化才重建
+    prevWowKey = wowKey; // 记录指纹
+    const sel = $('wow-exe-select'); // 下拉框
+    const placeholder = wowHistory.length ? '选择历史路径' : '未选择（点浏览添加）'; // 占位项文案
+    sel.innerHTML = '<option class="disabled" value="">' + placeholder + '</option>' + // 占位项
+      wowHistory.map((p) => // 遍历历史路径
+        '<option value="' + esc(p) + '"' + (p === snap.wow_exe ? ' selected' : '') + '>' + esc(p) + '</option>'
+      ).join('');
+    sel.value = snap.wow_exe || ''; // 同步当前选中项
+    $('wow-exe-current').textContent = snap.wow_exe ? '当前: ' + snap.wow_exe : '当前: 未选择（WASD 走普通注入）'; // 路径显示
+  }
 
   // 开始/停止 + 悬浮窗按钮
   const toggle = $('btn-toggle'); // 获取开始/停止按钮元素
@@ -286,6 +302,18 @@ const App = {
     invoke('set_overlay_opacity', { opacity: overlayOpacity }); // 通知后端应用透明度
   },
 
+  // ---- 目标游戏 exe ----
+  pickWow() { // 浏览选择目标游戏 exe
+    invoke('pick_wow_exe')
+      .then(() => { prevWowKey = null; }) // 成功后清空指纹，强制刷新下拉框
+      .catch((e) => console.error('pick_wow_exe:', e));
+  },
+  selectWow(path) { // 从历史记录中选择目标游戏 exe
+    if (!path) return; // 占位项不提交
+    prevWowKey = null; // 强制刷新下拉框
+    invoke('set_wow_exe', { path }).catch((e) => console.error('set_wow_exe:', e));
+  },
+
   // ---- 独立窗口 ----
   openEdit(id) { openEditWindow(id); }, // 打开指定层的编辑窗口
   openHelp() { openHelpWindow(); }, // 打开使用说明窗口
@@ -303,6 +331,8 @@ $('btn-save').addEventListener('click', () => App.saveConfig()); // 保存配置
 $('btn-reset').addEventListener('click', () => App.resetConfig()); // 重置默认配置
 $('btn-overlay').addEventListener('click', () => App.toggleOverlay()); // 显示/关闭悬浮窗
 $('btn-help').addEventListener('click', () => App.openHelp()); // 打开使用说明
+$('btn-wow').addEventListener('click', () => App.pickWow()); // 浏览选择目标游戏 exe
+$('wow-exe-select').addEventListener('change', (e) => App.selectWow(e.target.value)); // 从历史记录选择目标 exe
 $('btn-quit').addEventListener('click', () => App.quit()); // 退出程序
 $('rename-ok').addEventListener('click', () => App.commitRename()); // 确认重命名/复制
 $('rename-cancel').addEventListener('click', () => App.cancelRename()); // 取消重命名/复制

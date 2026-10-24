@@ -39,3 +39,6 @@ inject_log.txt
 
 # Rust 构建目录
 target/
+
+# Trae 编辑器生成的 HTML 分享包（中间产物，非项目源码）
+.trae-html-share-packages/

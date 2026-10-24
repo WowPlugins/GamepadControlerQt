@@ -43,6 +43,10 @@ const K_TYPE_LOOK_AROUND: &str = "lookAround";
 const K_TYPE_TOGGLE_MAPPING: &str = "toggleMapping";
 const K_TYPE_TOGGLE_ON_SCREEN_KEYBOARD: &str = "toggleOnScreenKeyboard";
 const K_TYPE_TOGGLE_OVERLAY: &str = "toggleOverlay";
+const K_TYPE_INTERACTION_KEY: &str = "interactionKey";
+const K_TYPE_RELEASE_MOUSE_TOGGLE: &str = "releaseMouseToggle";
+const K_TYPE_SWAP_MOUSE_TOGGLE: &str = "swapMouseToggle";
+const K_TYPE_FINE_LOOK: &str = "fineLook";
 
 // =====================================================================
 // 序列化：ControllerProfile -> JSON 文本
@@ -67,6 +71,8 @@ pub fn profile_to_json(profile: &ControllerProfile) -> Value {
         "releaseOnForegroundChange": profile.global_settings.release_on_foreground_change,
         "confirmOnClose": profile.global_settings.confirm_on_close,
         "overlayOpacity": profile.global_settings.overlay_opacity,
+        "wowExe": profile.global_settings.wow_exe,
+        "wowExeHistory": profile.global_settings.wow_exe_history,
     });
     // 【Rust 语法】`as_object_mut()`：把 Value 转成 `Option<&mut Map>`（可变借用其中的对象）；`expect("object")`：若是 Some 则取出值，若是 None 则 panic 并输出提示信息（这里对象必然存在）。
     gs.as_object_mut().expect("object");
@@ -163,6 +169,16 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
         s.release_on_foreground_change = bool_(gs, "releaseOnForegroundChange", true);
         s.confirm_on_close = bool_(gs, "confirmOnClose", true);
         s.overlay_opacity = num(gs, "overlayOpacity", 0.8);
+        s.wow_exe = gs.get("wowExe").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if let Some(Value::Array(arr)) = gs.get("wowExeHistory") {
+            for v in arr {
+                if let Some(p) = v.as_str() {
+                    if !p.is_empty() && !s.wow_exe_history.iter().any(|x| x == p) {
+                        s.wow_exe_history.push(p.to_string());
+                    }
+                }
+            }
+        }
         // 把组装好的全局设置赋回 profile。
         profile.global_settings = s;
     }
@@ -313,6 +329,14 @@ fn action_to_json(action: &MappedAction) -> Value {
         ActionType::ToggleOnScreenKeyboard => json!({ "type": K_TYPE_TOGGLE_ON_SCREEN_KEYBOARD }),
         // 开关叠加层：只输出 type。
         ActionType::ToggleOverlay => json!({ "type": K_TYPE_TOGGLE_OVERLAY }),
+        // 交互键：只输出 type。
+        ActionType::InteractionKey => json!({ "type": K_TYPE_INTERACTION_KEY }),
+        // 释放鼠标左右键锁存：只输出 type。
+        ActionType::ReleaseMouseToggle => json!({ "type": K_TYPE_RELEASE_MOUSE_TOGGLE }),
+        // 交换鼠标左右键锁存：只输出 type。
+        ActionType::SwapMouseToggle => json!({ "type": K_TYPE_SWAP_MOUSE_TOGGLE }),
+        // 鼠标精细移动：只输出 type。
+        ActionType::FineLook => json!({ "type": K_TYPE_FINE_LOOK }),
     }
 }
 
@@ -349,6 +373,10 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
         K_TYPE_TOGGLE_MAPPING => Some(MappedAction::toggle_mapping()),
         K_TYPE_TOGGLE_ON_SCREEN_KEYBOARD => Some(MappedAction::toggle_on_screen_keyboard()),
         K_TYPE_TOGGLE_OVERLAY => Some(MappedAction::toggle_overlay()),
+        K_TYPE_INTERACTION_KEY => Some(MappedAction::interaction_key()),
+        K_TYPE_RELEASE_MOUSE_TOGGLE => Some(MappedAction::release_mouse_toggle()),
+        K_TYPE_SWAP_MOUSE_TOGGLE => Some(MappedAction::swap_mouse_toggle()),
+        K_TYPE_FINE_LOOK => Some(MappedAction::fine_look()),
         _ => None, // 未知类型
     }
 }
@@ -359,6 +387,10 @@ fn mapping_to_json(mapping: &KeyMapping) -> Value {
     json!({
         "action": action_to_json(&mapping.action),
         "subCommands": mapping.sub_commands,
+        // 长按动作（None 时输出 null，保持文件可读）
+        "longPress": mapping.long_press.as_ref().map(|a| action_to_json(a)),
+        "longPressSubCommands": mapping.long_press_subs,
+        "longPressMs": mapping.long_press_ms,
     })
 }
 
@@ -389,8 +421,35 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
     if subs.len() > KeyMapping::MAX_SUB_COMMANDS {
         return None; // 子命令超限，跳过
     }
+    // 长按动作：可选；存在且是对象才解析（非法长按动作忽略，不影响主动作）
+    let long_press = match obj.get("longPress") {
+        Some(v) if v.is_object() => parse_action(v),
+        _ => None,
+    };
+    let mut long_subs: Vec<i32> = Vec::new();
+    if let Some(Value::Array(arr)) = obj.get("longPressSubCommands") {
+        for v in arr {
+            if let Some(n) = v.as_i64() {
+                long_subs.push(n as i32);
+            }
+        }
+    }
+    if long_subs.len() > KeyMapping::MAX_SUB_COMMANDS {
+        long_subs.truncate(KeyMapping::MAX_SUB_COMMANDS);
+    }
+    let long_press_ms = obj
+        .get("longPressMs")
+        .and_then(|v| v.as_i64())
+        .map(|v| v.clamp(100, 5000) as u32)
+        .unwrap_or(KeyMapping::DEFAULT_LONG_PRESS_MS);
     // 【Rust 语法】结构体字面量：`action` 是字段名简写——等价于 `action: action`，即变量名与字段名相同可省略冒号部分。
-    Some(KeyMapping { action, sub_commands: subs })
+    Some(KeyMapping {
+        action,
+        sub_commands: subs,
+        long_press,
+        long_press_subs: long_subs,
+        long_press_ms,
+    })
 }
 
 // 【Rust 语法】把 OperationLayer（操作层）转成 JSON 对象。

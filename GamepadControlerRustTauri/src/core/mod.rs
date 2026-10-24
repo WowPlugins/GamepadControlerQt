@@ -27,6 +27,8 @@ pub mod mapping_types;
 pub mod steam_input;
 // 【Rust 语法】pub mod：声明公开子模块 xinput_source（XInput 手柄读取源）
 pub mod xinput_source;
+// 【Rust 语法】pub mod：声明公开子模块 wow_sender（按 exe 定位目标窗口并投递键盘消息）
+pub mod wow_sender;
 
 // 【Rust 语法】pub use 重导出：把 app::AppCore 提升到 core 模块顶层，外部可直接用 crate::core::AppCore 引用
 pub use app::AppCore;

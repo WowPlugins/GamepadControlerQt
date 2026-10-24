@@ -21,7 +21,11 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 // 【Rust 语法】glob 通配导入（::*）：一次性引入 windows crate 中 KeyboardAndMouse 模块的全部公开项。
 // windows crate 是微软官方 Windows API 的 Rust 绑定库（在内部对 FFI/unsafe 调用做了安全封装）。
+use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CYSCREEN,
+};
 
 // windows crate 0.62 未导出这些 XButton / 滚轮常量，自行定义（与 Windows SDK 一致）
 // 【Rust 语法】const 声明编译期常量：类型必须显式标注；u32 为无符号 32 位整数。
@@ -179,8 +183,8 @@ pub fn android_key_code_to_windows_scan_code(code: i32) -> u16 { // 函数体开
 } // 函数结束
 
 /// 判断 Android KeyCode 是否为扩展键（需要 KEYEVENTF_EXTENDEDKEY）
-// 【Rust 语法】私有函数（无 pub）；参数 code: i32，返回 bool（布尔类型，true/false）。
-fn is_extended_key(code: i32) -> bool { // 函数体开始
+/// 【pub(crate)】仅在本 crate 内可见：wow_sender 组装 PostMessage 的 lParam 时复用同一判定。
+pub(crate) fn is_extended_key(code: i32) -> bool { // 函数体开始
     // 【Rust 语法】matches! 宏：判断表达式是否匹配给定模式，返回 bool，等价于 `match 表达式 { 模式 => true, _ => false }`。
     // 模式中 | 表示「或」（多个备选模式之一命中即 true），无需写成多个 match 分支。
     matches!(
@@ -448,4 +452,31 @@ impl InputInjector {
         st.mouse_remainder_x = 0.0; // 清零 X 方向余量
         st.mouse_remainder_y = 0.0; // 清零 Y 方向余量
     } // 方法结束
+
+    // -----------------------------------------------------------------
+    // 光标位置 / 屏幕尺寸（交互键与 WASD 拦截使用）
+    // -----------------------------------------------------------------
+
+    /// 读取当前鼠标光标屏幕坐标
+    pub fn get_cursor_pos(&self) -> (i32, i32) {
+        let mut p = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetCursorPos(&mut p).is_err() {
+                return (0, 0);
+            }
+        }
+        (p.x, p.y)
+    }
+
+    /// 把光标移动到指定屏幕坐标（超出屏幕时由系统钳制到边缘）
+    pub fn set_cursor_pos(&self, x: i32, y: i32) {
+        unsafe {
+            let _ = SetCursorPos(x, y);
+        }
+    }
+
+    /// 主屏幕尺寸（宽, 高）
+    pub fn screen_size(&self) -> (i32, i32) {
+        unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
+    }
 } // impl InputInjector 块结束

@@ -117,6 +117,11 @@ fn main() { // 程序主入口
             commands::open_app, // 打开应用
             commands::rename_layer, // 重命名层集
             commands::change_layer_trigger_button, // 改变层的激活按钮
+            commands::set_long_press, // 配置长按动作
+            commands::set_long_press_ms, // 设置长按判定阈值
+            commands::toggle_long_press_sub, // 切换长按子命令
+            commands::pick_wow_exe, // 浏览选择 WoW 可执行文件
+            commands::set_wow_exe, // 从历史记录选择 WoW 可执行文件
             commands::get_overlay_opacity,
         ]) // 命令数组宏结束
         // 【Rust 语法】闭包：|app| 为参数列表；在应用初始化完成后、运行前回调，用于创建额外窗口
