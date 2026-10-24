@@ -1,6 +1,6 @@
 [package]
 name = "gamepad_controler_tauri"
-version = "0.0.31"
+version = "0.0.32"
 edition = "2021"
 
 # Windows 原生手柄 -> 键鼠映射器（Tauri GUI 版）

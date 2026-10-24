@@ -793,7 +793,12 @@ impl MapperState {
         } // 结束 if 判断
 
         // 需求3：WASD 触发拦截
-        if !target.is_empty() && !self.is_mouse_locked(MouseButton::Right) { // 右键未锁存
+        // 排除场景：鼠标左键处于锁存状态（例如按住左键拖拽/交互）时不自动锁右键、不挪光标，
+        // WASD 继续走常规 SendInput，避免打断左键操作。
+        if !target.is_empty()
+            && !self.is_mouse_locked(MouseButton::Right)
+            && !self.is_mouse_locked(MouseButton::Left)
+        { // 左右键均未锁存才自动锁定右键
             let (w, h) = injector.screen_size();
             self.auto_lock_saved_pos = Some(injector.get_cursor_pos()); // 记录锁定前光标位置
             // 屏幕左下角、屏幕外 2/3 处（系统会把越界坐标钳制到屏幕边缘）
