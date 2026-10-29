@@ -182,6 +182,8 @@ pub struct MapperState {
     /// 平滑状态（仅 look 线程使用）
     pub smoothed_look_x: f32, // 视角 EMA 平滑后的 X 值
     pub smoothed_look_y: f32, // 视角 EMA 平滑后的 Y 值
+    /// 悬浮窗展开/收起切换计数（每次触发 +1，悬浮窗前端轮询据此翻转展开状态）
+    pub overlay_expand_rev: u64,
 } // 结束 MapperState 结构体定义
 
 /// 判断是否为修饰键（Alt/Ctrl/Shift）：
@@ -387,6 +389,7 @@ impl MapperState {
             ActionType::ReleaseMouseToggle => self.handle_release_mouse_toggle(injector, event_tx), // 释放鼠标锁存（需求4）
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
             ActionType::FineLook => look.set_fine_look(true), // 精细移动：按下进入（需求7）
+            ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             // 【Rust 语法】模式 `|`（或）匹配：多个变体共享同一分支代码。
             ActionType::SwitchLayer // 切换层动作
             | ActionType::ToggleMapping // 切换映射

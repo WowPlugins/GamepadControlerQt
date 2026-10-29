@@ -77,6 +77,7 @@ const KINDS = [
   ['releasemousetoggle', '释放鼠标锁存'], // 释放鼠标左右键长按锁存
   ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
   ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
+  ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
 ];
 
 // LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理，未设置无长按，均不能作为长按动作）
@@ -92,7 +93,7 @@ const MOUSE_BUTTONS = [
 ];
 
 // NO_TARGET_KINDS：无需选择额外目标的动作类型，选中即生效
-const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook'];
+const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook', 'toggleoverlayexpand'];
 
 // ---------------------------------------------------------------------
 // 工具

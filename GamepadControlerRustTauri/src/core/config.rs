@@ -47,6 +47,7 @@ const K_TYPE_INTERACTION_KEY: &str = "interactionKey";
 const K_TYPE_RELEASE_MOUSE_TOGGLE: &str = "releaseMouseToggle";
 const K_TYPE_SWAP_MOUSE_TOGGLE: &str = "swapMouseToggle";
 const K_TYPE_FINE_LOOK: &str = "fineLook";
+const K_TYPE_TOGGLE_OVERLAY_EXPAND: &str = "toggleOverlayExpand";
 
 // =====================================================================
 // 序列化：ControllerProfile -> JSON 文本
@@ -337,6 +338,7 @@ fn action_to_json(action: &MappedAction) -> Value {
         ActionType::SwapMouseToggle => json!({ "type": K_TYPE_SWAP_MOUSE_TOGGLE }),
         // 鼠标精细移动：只输出 type。
         ActionType::FineLook => json!({ "type": K_TYPE_FINE_LOOK }),
+        ActionType::ToggleOverlayExpand => json!({ "type": K_TYPE_TOGGLE_OVERLAY_EXPAND }),
     }
 }
 
@@ -377,6 +379,7 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
         K_TYPE_RELEASE_MOUSE_TOGGLE => Some(MappedAction::release_mouse_toggle()),
         K_TYPE_SWAP_MOUSE_TOGGLE => Some(MappedAction::swap_mouse_toggle()),
         K_TYPE_FINE_LOOK => Some(MappedAction::fine_look()),
+        K_TYPE_TOGGLE_OVERLAY_EXPAND => Some(MappedAction::toggle_overlay_expand()),
         _ => None, // 未知类型
     }
 }

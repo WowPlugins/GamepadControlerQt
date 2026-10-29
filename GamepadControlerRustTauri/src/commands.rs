@@ -80,6 +80,8 @@ pub struct OverlaySnapshot { // 悬浮窗整体快照
     max_mappings: usize, // 最大映射数
     /// 悬浮窗卡片背景透明度（0.2 ~ 1.0），前端据此设置背景 alpha
     opacity: f32, // 透明度数值
+    /// 悬浮窗展开/收起切换计数：每次手柄触发 +1，前端据此翻转展开状态
+    expand_rev: u64, // 切换计数
 } // 结构体结束
 
 // ---------------------------------------------------------------------
@@ -219,6 +221,7 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
         ActionType::ReleaseMouseToggle => "释放鼠标锁存".to_string(), // 释放鼠标左右键锁存
         ActionType::SwapMouseToggle => "交换鼠标左右键锁存".to_string(), // 交换左右键锁存
         ActionType::FineLook => "鼠标精细移动".to_string(), // 右摇杆精细移动
+        ActionType::ToggleOverlayExpand => "切换悬浮窗展开/收起".to_string(), // 悬浮窗展开状态切换
         _ => "（未知）".to_string(), // 【Rust 语法】通配符 _ 分支：兜底匹配所有未列出的枚举值
     } // match 结束
 } // 函数结束
@@ -237,6 +240,7 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::ReleaseMouseToggle => "releasemousetoggle", // 释放鼠标锁存
         ActionType::SwapMouseToggle => "swapmousetoggle", // 交换左右键锁存
         ActionType::FineLook => "finelook", // 精细移动
+        ActionType::ToggleOverlayExpand => "toggleoverlayexpand", // 切换悬浮窗展开/收起
         _ => "keyboard", // 未知类型兜底为 keyboard
     } // match 结束
     .to_string() // 把匹配出的 &str 转为 String（match 是表达式，可直接接方法）
@@ -268,6 +272,7 @@ fn build_action(
         "releasemousetoggle" => Some(MappedAction::release_mouse_toggle()), // 释放鼠标锁存（需求4）
         "swapmousetoggle" => Some(MappedAction::swap_mouse_toggle()), // 交换左右键锁存（需求5）
         "finelook" => Some(MappedAction::fine_look()), // 精细移动（需求7）
+        "toggleoverlayexpand" => Some(MappedAction::toggle_overlay_expand()), // 切换悬浮窗展开/收起
         _ => None, // 未知类型不生成动作
     } // match 结束
 } // 函数结束
@@ -367,6 +372,7 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         } // for 循环结束
     } // 外层 if-let 结束
     let opacity = (*core).steam.profile.global_settings.overlay_opacity; // 读取透明度
+    let expand_rev = core.mapper.overlay_expand_rev; // 悬浮窗展开/收起切换计数（手柄触发时递增）
     // 当前操作集所有层（公共层+操作层）中映射数的最大值：前端据此固定展开高度
     let max_mappings = core.steam.profile.active_set() // 当前激活操作集
         .map(|s| { // 计算该操作集内的最大映射数
@@ -386,6 +392,7 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         mappings, // 映射行列表
         max_mappings, // 最大映射数（用于固定展开高度）
         opacity, // 透明度
+        expand_rev, // 展开/收起切换计数
     } // OverlaySnapshot 字面量结束
 } // 函数结束
 

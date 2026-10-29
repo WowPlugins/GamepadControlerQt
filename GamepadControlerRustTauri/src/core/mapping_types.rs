@@ -44,6 +44,7 @@ pub enum ActionType {
     ReleaseMouseToggle, // 释放鼠标左右键长按锁存
     SwapMouseToggle, // 交换鼠标左右键长按锁存
     FineLook, // 鼠标精细移动（右摇杆低灵敏度，按住生效）
+    ToggleOverlayExpand, // 切换悬浮窗展开/收起状态
 } // 结束 ActionType 枚举定义
 
 // MappedAction 含 Option<String>（layer_name），不能 Copy，只 Clone。
@@ -150,6 +151,14 @@ impl MappedAction {
             layer_name: None, // 无层切换
         } // 结束 Self 结构体字面量
     } // 结束 toggle_overlay 函数
+    pub fn toggle_overlay_expand() -> Self { // 构造"切换悬浮窗展开/收起"动作
+        Self { // 构造 ToggleOverlayExpand 动作实例
+            r#type: ActionType::ToggleOverlayExpand, // 动作类型设为切换悬浮窗展开状态
+            key_code: 0, // 不使用键盘键码
+            mouse_button: MouseButton::Left, // 鼠标键填默认值 Left
+            layer_name: None, // 无层切换
+        } // 结束 Self 结构体字面量
+    } // 结束 toggle_overlay_expand 函数
     pub fn interaction_key() -> Self { // 构造"交互键"动作
         Self {
             r#type: ActionType::InteractionKey,
@@ -254,6 +263,7 @@ impl KeyMapping {
             ActionType::ReleaseMouseToggle => parts.push("释放鼠标锁存".to_string()), // 释放锁存描述
             ActionType::SwapMouseToggle => parts.push("交换鼠标左右键锁存".to_string()), // 交换锁存描述
             ActionType::FineLook => parts.push("鼠标精细移动".to_string()), // 精细移动描述
+            ActionType::ToggleOverlayExpand => parts.push("切换悬浮窗展开".to_string()), // 切换悬浮窗展开/收起描述
         } // 结束 match 表达式
         // 【Rust 语法】for ... in 循环：`&self.sub_commands` 是对数组的不可变借用（不转移所有权），每次迭代 `sub` 绑定为元素引用 &i32。
         for sub in &self.sub_commands {

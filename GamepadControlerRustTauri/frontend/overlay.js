@@ -17,6 +17,7 @@ let prevKey = null; // 上一次渲染内容对比串，避免重复渲染
 let lastFitH = 0; // 上次贴合高度，高度没变就不 setSize，避免频繁调整
 let animating = false; // 展开/收起高度动画进行中，fitHeight 跳过避免干扰分步生长
 let collapsing = false; // 收起动画中：映射区由 setExpanded 控制 display，render 跳过避免截断淡出
+let lastExpandRev = null; // 上次已处理的「切换展开」计数（手柄触发时后端递增，前端据此翻转）
 
 const MIN_H = 60;  // 收起最小高度（防御下限；实际由 fitHeight 精确贴合卡片，四边透明带均为 4px）
 const MAX_H = 900; // 展开最大高度（内容完整显示的防御上限；悬浮窗高度随内容自适应，不裁剪）
@@ -57,6 +58,12 @@ async function tick() {
   ticking = true; // 标记轮询进行中
   try {
     const snap = await invoke('get_overlay_snapshot'); // 调用后端命令获取悬浮窗快照
+    if (lastExpandRev === null) { // 首次取快照
+      lastExpandRev = snap.expand_rev; // 只记录基线，避免启动时误翻转
+    } else if (snap.expand_rev !== lastExpandRev) { // 手柄触发了展开/收起切换
+      lastExpandRev = snap.expand_rev; // 更新基线
+      if (!animating) setExpanded(!expanded); // 动画进行中则跳过，避免打断高度动画
+    }
     const key = JSON.stringify(snap) + '|' + expanded; // 组合对比串（含展开状态）
     if (key !== prevKey) { // 有变化才渲染
       prevKey = key; // 记录本次内容
