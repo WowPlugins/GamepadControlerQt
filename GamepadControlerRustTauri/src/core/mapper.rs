@@ -525,7 +525,7 @@ impl MapperState {
     // -----------------------------------------------------------------
     // 需求1：交互键
     // -----------------------------------------------------------------
-    /// 记录鼠标左右键锁存状态与光标位置 -> 解锁 -> 移到屏幕中央左右键各点一次
+    /// 记录鼠标左右键锁存状态与光标位置 -> 解锁 -> 移到屏幕中央右键点击一次
     /// -> 光标移回原位 -> 恢复锁存。
     fn handle_interaction_key(&mut self, injector: &InputInjector) {
         // a. 记录左右键锁存状态（用户要求：左右键都要判断）与当前光标位置
@@ -546,11 +546,8 @@ impl MapperState {
         let (w, h) = injector.screen_size(); // 主屏尺寸
         injector.set_cursor_pos(w / 2, h / 2); // 光标移到屏幕中央
         thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待光标就位
-        injector.send_mouse_down(MouseButton::Left); // 左键按下
-        injector.send_mouse_up(MouseButton::Left); // 左键抬起（完成一次点击）
-        thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 两次点击间隔
         injector.send_mouse_down(MouseButton::Right); // 右键按下
-        injector.send_mouse_up(MouseButton::Right); // 右键抬起
+        injector.send_mouse_up(MouseButton::Right); // 右键抬起（完成一次点击）
         thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待点击生效
 
         // c. 光标移回原位置，再恢复锁存状态
