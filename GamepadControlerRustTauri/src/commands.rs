@@ -69,11 +69,19 @@ pub struct MappingRow { // 悬浮窗中一行按键映射
 
 // 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
 #[derive(Serialize)]
+pub struct PressedRow { // 悬浮窗中一个「按下按键 + 其映射功能」条目
+    button: String, // 手柄按钮的显示名
+    desc: String, // 该按钮当前生效的映射描述（长按已触发时显示长按动作）
+} // 结构体结束
+
+// 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
+#[derive(Serialize)]
 pub struct OverlaySnapshot { // 悬浮窗整体快照
     set_name: String, // 当前操作集名称
     layer_name: String, // 当前层名称
     connected: bool, // 手柄连接状态
     pressed: Vec<String>, // 当前被按下的按钮显示名集合
+    pressed_rows: Vec<PressedRow>, // 按下的按钮与其映射功能（收起状态也显示功能）
     mouse_toggle: bool, // 是否有鼠标长按锁存
     mappings: Vec<MappingRow>, // 当前层按键映射行列表
     /// 当前操作集内映射最多的层的映射数，前端据此用占位行固定展开高度（切层不伸缩）
@@ -350,6 +358,32 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         .map(|b| controller_button_display_name(*b).to_string()) // 把按钮枚举转成显示名
         .collect(); // 收集为 Vec<String>
     pressed.sort(); // 排序，保证前端显示顺序稳定
+    // 按下的按钮对应的映射功能：长按已触发时显示长按动作，否则显示主动作
+    let mut pressed_rows: Vec<PressedRow> = core
+        .steam
+        .held_buttons() // 当前按住的按钮集合
+        .iter()
+        .map(|b| {
+            let triggered_long = core.mapper.long_press_buttons.contains(b); // 是否已触发长按
+            let desc = core
+                .steam
+                .get_effective_mapping(*b) // 查询当前生效映射
+                .map(|m| {
+                    if triggered_long {
+                        if let Some(lp) = &m.long_press {
+                            return describe_action(lp); // 长按已生效：显示长按动作
+                        }
+                    }
+                    describe_action(&m.action) // 未配置长按或尚未触发：显示主动作
+                })
+                .unwrap_or_else(|| "（无映射）".to_string()); // 该按钮在公共层也无映射
+            PressedRow {
+                button: controller_button_display_name(*b).to_string(), // 按钮显示名
+                desc, // 映射功能描述
+            }
+        })
+        .collect();
+    pressed_rows.sort_by(|a, b| a.button.cmp(&b.button)); // 按按钮名排序，避免抖动
     let mouse_toggle = !core.mapper.toggled_mouse_buttons.is_empty(); // 【Rust 语法】! 取反：集合非空则 true
     // 当前层映射列表：最后激活的操作层，否则公共层
     let active_layers = core.steam.get_active_layers(); // 获取当前激活的层引用数组
@@ -388,6 +422,7 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         layer_name, // 层名称
         connected, // 连接状态
         pressed, // 按住的按钮列表
+        pressed_rows, // 按住的按钮 + 映射功能
         mouse_toggle, // 鼠标长按标志
         mappings, // 映射行列表
         max_mappings, // 最大映射数（用于固定展开高度）

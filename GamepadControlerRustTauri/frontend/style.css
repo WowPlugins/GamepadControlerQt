@@ -806,6 +806,14 @@ html.overlay-html {
   box-shadow: 0 2px 8px rgba(127, 201, 196, 0.35); /* 青色光晕 */
 }
 
+.press-desc {
+  font-weight: 500; /* 映射描述不加粗，与按键名区分 */
+  font-size: 12px; /* 略小于按键名 */
+  color: #2f3a3d; /* 深青灰：在青色 chip 上弱化显示 */
+  margin-left: 2px; /* 与按键名留出间距 */
+  white-space: nowrap; /* 描述不换行，超长由容器 overflow 裁剪 */
+}
+
 #ov-warn {
   height: 28px; /* 固定高度：锁存警示出现/消失不改变悬浮窗高度（内容切换由 JS 处理） */
   display: flex;

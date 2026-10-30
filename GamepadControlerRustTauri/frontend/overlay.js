@@ -90,10 +90,13 @@ function render(snap) {
   if ($('ov-dot').className !== dotCls) $('ov-dot').className = dotCls; // 有变化才改
   setText('ov-conn', snap.connected ? '手柄已连接' : '手柄未连接'); // 连接状态文字
 
-  // 按下按键（仅按键内容变化才重建 chips）
-  setHTML('ov-pressed', snap.pressed.length === 0
+  // 按下按键（仅按键内容变化才重建 chips）：显示「按键名 → 映射功能」，收起状态也能看到功能
+  const pressedRows = snap.pressed_rows || []; // 按下的按钮 + 映射描述（后端提供）
+  setHTML('ov-pressed', pressedRows.length === 0
     ? '<span class="overlay-faint">无按键按下</span>' // 无按键时显示提示
-    : snap.pressed.map((p) => '<span class="press-chip">' + esc(p) + '</span>').join(''));
+    : pressedRows.map((r) => '<span class="press-chip">' + esc(r.button) // 按钮显示名
+        + (r.desc ? '<span class="press-desc">→ ' + esc(r.desc) + '</span>' : '') // 映射功能（淡色小字）
+        + '</span>').join(''));
 
   // L3 锁存警示（边框变橙 + 警示条）；ov-warn 固定高度占位，锁存切换只换内容不改变悬浮窗高度
   const mouseToggle = !!snap.mouse_toggle; // 是否有鼠标长按锁存
