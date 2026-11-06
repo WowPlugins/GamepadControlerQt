@@ -78,10 +78,18 @@ const KINDS = [
   ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
   ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
   ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
+  ['statemacro', '解锁右键+居中+按键'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
+];
+
+// STATE_OPTIONS：可用的角色状态（与插件 SLState 的 STATE_DEFS 一致）
+const STATE_OPTIONS = [
+  ['stealthed', '潜行中'], ['chatOpen', '聊天窗打开'], ['inCombat', '战斗中'], ['mounted', '骑乘中'],
+  ['hasTarget', '有目标'], ['hasPet', '有宠物'], ['isDead', '死亡'], ['isGhost', '灵魂状态'],
+  ['isFalling', '下落中'], ['isSwimming', '游泳中'],
 ];
 
 // LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理，未设置无长按，均不能作为长按动作）
-const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'none');
+const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'none' && k !== 'statemacro');
 
 // MOUSE_BUTTONS：可映射的鼠标按键列表，[枚举名, 中文显示名]
 const MOUSE_BUTTONS = [
@@ -127,6 +135,8 @@ let prevSelectKey = null; // 上一次「激活按钮」下拉框内容指纹，
 let renameLayerMode = false; // 是否正在重命名操作集
 let renameLayerId = null; // 当前重命名的操作集 id
 let renameLayerValue = ''; // 当前重命名的名称值
+let currentConds = []; // 当前按键的状态条件 [{stateId, expected}]
+let currentLogic = 'or'; // 状态条件组合方式（or / and）
 
 // 主窗口复用本窗口并切换目标层时，通过事件推送新的层 id
 listen('edit-layer', (e) => { // 注册 edit-layer 事件监听
@@ -213,7 +223,7 @@ function renderEdit(info, map) {
   $('edit-target').innerHTML = targetHTML(info, editKind, map); // 按动作类型渲染目标选择区
 
   // 子命令（键盘/滚轮动作提供组合键；其余动作类型不提供）
-  const showSubs = editKind === 'keyboard' || editKind === 'wheelup' || editKind === 'wheeldown'; // 是否显示子命令区（键盘/滚轮支持组合键）
+  const showSubs = editKind === 'keyboard' || editKind === 'wheelup' || editKind === 'wheeldown' || editKind === 'statemacro'; // 是否显示子命令区（键盘/滚轮/状态宏支持组合键）
   $('edit-subs').style.display = showSubs ? '' : 'none'; // 隐藏/显示子命令 chips 容器
   $('edit-subs-label').style.display = showSubs ? '' : 'none'; // 隐藏/显示子命令标题
   if (showSubs) { // 仅键盘动作渲染子命令
@@ -226,7 +236,32 @@ function renderEdit(info, map) {
       '子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
   }
 
+  renderStateConditions(map); // 渲染状态条件配置区（需求5）
   renderLongPress(info, map); // 渲染长按动作配置区（需求2）
+}
+
+// renderStateConditions：渲染「生效状态条件」区，点击状态 chip 在 未选/为真/为假 之间循环
+function renderStateConditions(map) {
+  const conds = map.state_conditions || []; // 已配置的条件列表
+  currentConds = conds.map((c) => ({ stateId: c.stateId, expected: c.expected })); // 复制到前端状态，供点击时增量修改
+  currentLogic = map.state_logic || 'or'; // or / and
+  const byId = {}; // stateId -> expected 便于快速查找
+  currentConds.forEach((c) => { byId[c.stateId] = c.expected; }); // 建立索引
+  $('edit-states').innerHTML = STATE_OPTIONS.map(([id, label]) => { // 遍历 10 个状态生成 chip
+    let cls = 'chip'; // 基础样式
+    let suffix = ''; // 后缀提示
+    if (byId[id] === true) { cls += ' active'; suffix = ' = 真'; } // 期望为真
+    else if (byId[id] === false) { cls += ' off'; suffix = ' = 假'; } // 期望为假
+    return '<div class="' + cls + '" onclick="App.cycleState(' + q(id) + ')">' + label + suffix + '</div>'; // 点击循环切换
+  }).join('');
+  $('edit-state-logic').innerHTML = [['or', '逻辑或（任一满足）'], ['and', '逻辑与（全部满足）']].map(([k, label]) => // 组合方式 chip
+    '<div class="chip' + (k === currentLogic ? ' active' : '') + '" onclick="App.setLogic(' + q(k) + ')">' + label + '</div>'
+  ).join('');
+  const showLogic = currentConds.length > 1; // 只有多条条件时才需要选择组合方式
+  $('edit-state-logic').style.display = showLogic ? '' : 'none'; // 显隐组合方式行
+  $('edit-states-label').textContent = currentConds.length
+    ? '生效状态条件（当前 ' + currentConds.length + ' 条）'
+    : '生效状态条件（不选则始终生效）';
 }
 
 // renderLongPress：渲染「长按动作」配置区（仅在当前按键已有主动作时可用）
@@ -286,6 +321,13 @@ function targetHTML(info, kind, act, isLong) {
         'onclick="App.set' + preset + 'Key(' + code + ')">' + label + '</div>' // 点击设置键盘映射（数字实参）
       ).join('') + '</div>';
   }
+  if (kind === 'statemacro') { // 状态宏 → 选择要发送的按键（按住期间解锁右键锁存并居中光标）
+    return '<div class="dim">选择要发送的按键（触发时先解锁右键锁存并居中光标）</div><div class="chips-row">' +
+      COMMON_KEYS.map(([code, label]) => // 遍历按键生成 chip
+        '<div class="chip ' + (code === a.key_code ? ' active' : '') + '" ' + // 当前按键加 active 高亮
+        'onclick="App.setMacroKey(' + code + ')">' + label + '</div>' // 点击设置状态宏主键
+      ).join('') + '</div>';
+  }
   if (kind === 'mouse' || kind === 'mousetoggle') { // 鼠标动作 → 显示鼠标键选择
     return '<div class="dim">选择鼠标键</div><div class="chips-row">' +
       MOUSE_BUTTONS.map(([name, label]) => // 遍历鼠标键生成 chip
@@ -333,6 +375,22 @@ const App = {
   },
   setLayer(name) { // 设置切层映射
     invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'switchlayer', layerName: name, keyCode: null, mouseButton: null }); // 写入目标层映射
+  },
+  setMacroKey(code) { // 设置状态宏要发送的主键
+    invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'statemacro', keyCode: code, mouseButton: null, layerName: null }); // 写入状态宏映射
+  },
+  cycleState(stateId) { // 切换某状态的条件：未选 -> 为真 -> 为假 -> 未选
+    const idx = currentConds.findIndex((c) => c.stateId === stateId); // 查找该状态是否已配置
+    if (idx < 0) currentConds.push({ stateId: stateId, expected: true }); // 未选 -> 为真
+    else if (currentConds[idx].expected === true) currentConds[idx].expected = false; // 为真 -> 为假
+    else currentConds.splice(idx, 1); // 为假 -> 未选
+    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentConds, logic: currentLogic }); // 提交到后端
+    prevEdit = null; // 强制下一轮重新渲染
+  },
+  setLogic(logic) { // 切换条件组合方式（逻辑或 / 逻辑与）
+    currentLogic = logic; // 更新前端状态
+    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentConds, logic: logic }); // 提交到后端
+    prevEdit = null; // 强制重新渲染
   },
   clearMapping() { // 清除当前按键映射
     invoke('clear_mapping', { layerId: editLayerId, button: selectedButton });

@@ -24,6 +24,10 @@ use crate::core::steam_input::{ButtonDispatch, SteamInput};
 use crate::core::UiEvent;
 // 【Rust 语法】导入 SourceEvent（手柄事件源枚举：连接/按钮/摇杆）。
 use crate::core::xinput_source::SourceEvent;
+// 【Rust 语法】导入 StateBits（角色状态位，由像素读取线程写入）。
+use crate::core::state_reader::StateBits;
+// 【Rust 语法】导入 TriggerId（触发源：手柄按键 / 物理键盘规则）。
+use crate::core::input_types::TriggerId;
 // 【Rust 语法】`std::sync::mpsc::Sender`：标准库 mpsc 多生产者单消费者通道的发送端，用于跨线程发送 UI 事件。
 use std::sync::mpsc::Sender;
 // 【Rust 语法】`std::sync::Arc`：原子引用计数智能指针，允许多个线程共享同一份数据的所有权。
@@ -39,6 +43,8 @@ pub struct AppCore {
     pub injector: Arc<InputInjector>,
     // 【Rust 语法】`Arc<LookState>`：视角状态同样用 Arc 共享（look 线程独立使用）。
     pub look: Arc<LookState>,
+    /// 角色状态位（像素读取线程写入，映射线程只读）
+    pub states: Arc<StateBits>,
     /// 手柄当前是否连接（UI 轮询显示）
     // pub 字段：手柄连接标志，UI 据此轮询显示。
     pub connected: bool,
@@ -64,6 +70,8 @@ impl AppCore {
             mapper: MapperState::default(),
             // 用默认值构造 LookState 并放进 Arc。
             look: Arc::new(LookState::default()),
+            // 角色状态位初始全为假（像素读取线程启动后写入真实值）。
+            states: Arc::new(StateBits::new()),
             // 字段简写：`injector` 等价于 `injector: injector`（变量名与字段名相同可省略）。
             injector,
             // 初始状态：手柄未连接。
@@ -106,18 +114,24 @@ impl AppCore {
                         mapping,
                         layer_id,
                     } => {
-                        // 调用 mapper 处理按钮注入（传入按钮、状态、映射、来源层、注入器、事件发送端与视角状态）。
-                        self.mapper.handle_button(
-                            button,
-                            is_pressed,
-                            // `&mapping` 传入映射的借用。
-                            &mapping,
-                            &layer_id,
-                            // 【Rust 语法】`injector.as_ref()`：把 Arc<InputInjector> 转成 &InputInjector 引用传给方法。
-                            self.injector.as_ref(),
-                            &self.event_tx,
-                            self.look.as_ref(),
-                        );
+                        // 状态条件不满足时跳过"按下"；松开必须放行，否则按键会卡住
+                        let states = Arc::clone(&self.states);
+                        let allowed = !is_pressed
+                            || mapping.state_allows(|id| states.get(id));
+                        if allowed {
+                            // 调用 mapper 处理按钮注入（传入按钮、状态、映射、来源层、注入器、事件发送端与视角状态）。
+                            self.mapper.handle_button(
+                                TriggerId::Pad(button),
+                                is_pressed,
+                                // `&mapping` 传入映射的借用。
+                                &mapping,
+                                &layer_id,
+                                // 【Rust 语法】`injector.as_ref()`：把 Arc<InputInjector> 转成 &InputInjector 引用传给方法。
+                                self.injector.as_ref(),
+                                &self.event_tx,
+                                self.look.as_ref(),
+                            );
+                        }
                     }
                     // 松开激活层按钮：释放该层内产生的鼠标左右键锁存（需求6）
                     ButtonDispatch::DeactivateLayer(layer_id) => {
@@ -169,6 +183,72 @@ impl AppCore {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------
+    // 物理键盘组合键事件入口（键盘钩子 worker 线程回调）
+    // -----------------------------------------------------------------
+    /// 执行一条键盘映射规则：按下时做状态门禁并注入，松开时精确释放。
+    /// 键盘规则不经过 SteamInput（没有层/操作集概念），层 id 传空串。
+    pub fn handle_keyboard_event(&mut self, rule_id: u32, is_pressed: bool) {
+        let trigger = TriggerId::Kb(rule_id);
+        // 找到规则并克隆映射（规则被删除 / 禁用时为 None）
+        let mut mapping = self
+            .steam
+            .profile
+            .keyboard_rules
+            .iter()
+            .find(|r| r.id == rule_id && r.enabled)
+            .map(|r| r.mapping.clone());
+        // 键盘触发源没有手柄心跳 Tick 驱动长按判定，清空长按相关配置避免动作丢失
+        if let Some(m) = mapping.as_mut() {
+            m.long_press = None;
+            m.long_press_subs.clear();
+        }
+
+        if !is_pressed {
+            match mapping {
+                // 常规松开：按原映射精确释放（与手柄一致）
+                Some(m) => self.mapper.handle_button(
+                    trigger,
+                    false,
+                    &m,
+                    "",
+                    self.injector.as_ref(),
+                    &self.event_tx,
+                    self.look.as_ref(),
+                ),
+                None => {
+                    // 规则在按住期间被删除 / 禁用：按"已注入状态"兜底释放，避免卡键
+                    self.mapper
+                        .release_button_injection(trigger, self.injector.as_ref());
+                    self.look.set_fine_look(false);
+                }
+            }
+            return;
+        }
+
+        // 按下：总开关关闭时忽略
+        if !self.steam.profile.global_settings.keyboard_rules_enabled {
+            return;
+        }
+        let Some(mapping) = mapping else {
+            return; // 规则不存在或已禁用
+        };
+        // 状态条件不满足时不执行（钩子侧已做同样判断，这里兜底）
+        let states = Arc::clone(&self.states);
+        if !mapping.state_allows(|id| states.get(id)) {
+            return;
+        }
+        self.mapper.handle_button(
+            trigger,
+            true,
+            &mapping,
+            "",
+            self.injector.as_ref(),
+            &self.event_tx,
+            self.look.as_ref(),
+        );
     }
 
     // 【Rust 语法】私有方法 `fn handle_connected(&mut self, ...)`：处理连接状态变化。

@@ -78,6 +78,8 @@ fn main() { // 程序主入口
     let shared = Arc::new(ui::shared::AppShared::new()); // 构建跨线程共享的核心状态
     { // 【Rust 语法】独立代码块：限定变量作用域，使锁在块结束时自动释放
         let profile = core::config_manager::load(); // 从 exe 同目录加载配置文件，返回 ControllerProfile
+        // 按配置恢复调试日志开关（默认关闭；开启时会分配控制台窗口）
+        core::debug_log::set_enabled(profile.global_settings.debug_log);
         // 【Rust 语法】if-let 模式匹配：尝试获取 Mutex 锁；Ok 则解出可变引用 core，Err（锁中毒）则整块跳过
         if let Ok(mut core) = shared.core.lock() { // 加锁成功后取得核心的可变访问
             core.load_profile(profile); // 把加载的配置载入核心
@@ -118,11 +120,26 @@ fn main() { // 程序主入口
             commands::rename_layer, // 重命名层集
             commands::change_layer_trigger_button, // 改变层的激活按钮
             commands::set_long_press, // 配置长按动作
+            commands::set_state_conditions, // 配置映射的状态条件
+            commands::set_state_read_enabled, // 开关角色状态读取
+            commands::set_state_read_interval, // 设置状态读取周期
+            commands::set_state_pixel_pos, // 设置像素锚点坐标
+            commands::set_debug_log, // 设置调试日志开关
             commands::set_long_press_ms, // 设置长按判定阈值
             commands::toggle_long_press_sub, // 切换长按子命令
             commands::pick_wow_exe, // 浏览选择 WoW 可执行文件
             commands::set_wow_exe, // 从历史记录选择 WoW 可执行文件
             commands::get_overlay_opacity,
+            // 物理键盘组合键规则
+            commands::get_keyboard_rules, // 读取键盘规则列表
+            commands::add_keyboard_rule, // 新增键盘规则
+            commands::delete_keyboard_rule, // 删除键盘规则
+            commands::set_keyboard_rule_enabled, // 开关单条键盘规则
+            commands::set_keyboard_rules_enabled, // 开关键盘规则总开关
+            commands::set_keyboard_rule_combo, // 设置组合键
+            commands::set_keyboard_rule_action, // 设置规则动作
+            commands::toggle_keyboard_rule_sub, // 切换规则子命令
+            commands::set_keyboard_rule_state_conditions, // 设置规则状态条件
         ]) // 命令数组宏结束
         // 【Rust 语法】闭包：|app| 为参数列表；在应用初始化完成后、运行前回调，用于创建额外窗口
         .setup(|app| { 

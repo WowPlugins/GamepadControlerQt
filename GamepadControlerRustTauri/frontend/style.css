@@ -151,7 +151,16 @@ body::before {
 }
 
 .left-panel { width: 268px; flex-shrink: 0; } /* 左栏固定宽度、不允许压缩 */
-.right-panel { flex: 1; min-width: 0; } /* 右栏占满剩余宽度、允许收缩 */
+.right-panel { flex: 1; min-width: 0; overflow: hidden; } /* 右栏占满剩余宽度、允许收缩（滚动交给内部设置区） */
+.right-scroll {
+  display: flex; /* 弹性布局 */
+  flex-direction: column; /* 垂直排列设置项 */
+  gap: 10px; /* 设置项间距（与原面板一致） */
+  flex: 1; /* 占满按钮行以外的剩余高度 */
+  min-height: 0; /* 允许内部滚动 */
+  overflow-y: auto; /* 设置项过多时仅此处滚动 */
+  overflow-x: hidden; /* 禁止横向滚动 */
+}
 
 .panel-title {
   font-size: 13px; /* 面板标题字号 */
@@ -208,6 +217,11 @@ body::before {
 .btn.danger:hover {
   border-color: #ff8a85; /* 悬停描边更亮红 */
   box-shadow: 0 5px 14px rgba(229, 85, 79, 0.4); /* 红色光晕投影 */
+}
+.btn.active {
+  border-color: #33ff99; /* 开启态：青色描边 */
+  color: #33ff99; /* 青色文字 */
+  box-shadow: 0 0 10px rgba(51, 255, 153, 0.25); /* 青色光晕 */
 }
 
 .select {
@@ -326,6 +340,7 @@ body::before {
   flex-wrap: wrap; /* 允许换行 */
   gap: 6px; /* 按钮间距 */
   align-items: center; /* 垂直居中 */
+  flex-shrink: 0; /* 不随面板压缩（窗口变矮时优先压缩可滚动设置区） */
 }
 
 /* ---- 操作集 chip / 子命令 ---- */
@@ -368,6 +383,12 @@ body::before {
   background: linear-gradient(135deg, #5aa39f, #4a8f8b); /* 子命令选中态：较深的青色渐变 */
   border-color: #5aa39f; /* 描边 */
   color: #232529; /* 深色文字 */
+}
+.chip.off {
+  background: linear-gradient(135deg, #8c4a4a, #743c3c); /* 状态条件为「假」：暗红渐变 */
+  border-color: #e05a5a; /* 红色描边 */
+  color: #ffd7d7; /* 浅红文字 */
+  font-weight: 600; /* 加粗 */
 }
 
 /* ---- 层列表 ---- */
@@ -576,7 +597,7 @@ body::before {
   width: 180px; /* 固定宽度 */
   flex-shrink: 0; /* 不允许压缩 */
   overflow-y: auto; /* 超出滚动 */
-  padding-right: 8px; /* 右侧留白：避免悬停右移产生横向溢出导致滚动条闪动 */
+  padding: 4px 8px 6px 0; /* 顶部/底部留白：避免按钮悬停上浮与投影被滚动容器边缘裁剪 */
 }
 
 .pad-btn {
@@ -631,6 +652,7 @@ body::before {
   flex: 1; /* 占满剩余宽度 */
   min-width: 0; /* 允许收缩 */
   overflow-y: auto; /* 超出滚动 */
+  padding: 4px 2px 6px 0; /* 顶部/底部留白：避免按钮悬停上浮与投影被滚动容器边缘裁剪 */
 }
 
 .edit-current-row {
@@ -643,6 +665,42 @@ body::before {
 #edit-current {
   font-size: 14px; /* 当前映射字号 */
   color: #7fc9c4; /* 青色强调 */
+}
+
+/* ---- 物理键盘映射视图 ---- */
+.kb-combo {
+  flex: 1; /* 占满剩余宽度 */
+  text-align: center; /* 居中显示 */
+  font-size: 14px; /* 字号 */
+  color: #7fc9c4; /* 青色强调 */
+  padding: 4px 8px; /* 内边距 */
+  background: rgba(255, 255, 255, 0.03); /* 极淡底色 */
+  border: 1px solid #3f434a; /* 描边 */
+  border-radius: 8px; /* 圆角 */
+  white-space: nowrap; /* 不换行 */
+  overflow: hidden; /* 裁剪溢出 */
+  text-overflow: ellipsis; /* 过长省略 */
+}
+.kb-combo.recording {
+  border-color: #f0a34a; /* 录制中：橙色描边 */
+  color: #f0a34a; /* 橙色文字 */
+}
+
+/* 悬浮提示：自绘并使用 fixed 定位，避免被滚动容器边缘裁剪 */
+.tip {
+  position: fixed; /* 相对视口定位 */
+  display: none; /* 默认隐藏（显示时由 JS 置为 block） */
+  z-index: 999; /* 置于最上层 */
+  max-width: 280px; /* 最大宽度 */
+  padding: 6px 10px; /* 内边距 */
+  font-size: 12px; /* 字号 */
+  line-height: 1.5; /* 行高 */
+  color: #e8eaee; /* 文字颜色 */
+  background: #2b2f36; /* 深色背景，与整体风格一致 */
+  border: 1px solid #4a4e55; /* 描边 */
+  border-radius: 8px; /* 圆角 */
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); /* 投影 */
+  pointer-events: none; /* 不拦截鼠标事件 */
 }
 
 /* ---- 帮助视图 ---- */

@@ -1,0 +1,65 @@
+<!DOCTYPE html> <!-- 声明文档类型为 HTML5 -->
+<html lang="zh-CN"> <!-- 页面语言为简体中文 -->
+<head> <!-- 头部：页面元信息与资源引用 -->
+  <meta charset="UTF-8"> <!-- 字符编码 UTF-8（源码含中文必须） -->
+  <title>物理键盘映射</title> <!-- 浏览器标签页标题 -->
+  <link rel="stylesheet" href="style.css"> <!-- 引入全局样式表（与主窗口同主题） -->
+</head>
+<body>
+  <!-- 独立「物理键盘映射」窗口：由主窗口 WebviewWindow("keymacro-win") 打开 -->
+  <div class="root"> <!-- 根容器：flex 纵向布局 -->
+    <div class="edit-header"> <!-- 顶部标题栏 -->
+      <div class="edit-title">物理键盘映射</div> <!-- 窗口标题 -->
+      <button class="btn" id="kb-total">物理键盘映射：--</button> <!-- 总开关（keymacro.js 同步文案与颜色） -->
+      <button class="btn" id="kb-close">关闭</button> <!-- 关闭本窗口按钮 -->
+    </div>
+
+    <div class="edit-body"> <!-- 左右两栏布局 -->
+      <!-- 左栏：规则列表 -->
+      <div class="edit-grid"> <!-- 复用编辑层左栏样式（固定宽度 + 纵向滚动） -->
+        <button class="btn" id="kb-add">添加规则</button> <!-- 新增一条键盘规则 -->
+        <div id="kb-list" class="layer-list"></div> <!-- 规则列表（keymacro.js 动态渲染） -->
+        <div class="faint">命中规则的按键会被拦截并执行映射；未命中的按键原样发送给游戏。</div> <!-- 拦截策略说明 -->
+      </div>
+
+      <div class="edit-divider"></div> <!-- 竖向分隔线 -->
+
+      <!-- 右栏：规则配置 -->
+      <div class="edit-right">
+        <div class="edit-current-row"> <!-- 当前规则操作行 -->
+          <span id="kb-current">当前: 未选择规则</span> <!-- 当前规则组合键文本 -->
+          <button class="btn" id="kb-rule-toggle">启用规则</button> <!-- 单条规则启用/停用 -->
+          <button class="btn danger" id="kb-rule-delete">删除规则</button> <!-- 删除当前规则 -->
+        </div>
+
+        <div class="dim">组合键</div> <!-- 组合键区标题 -->
+        <div class="slider-row"> <!-- 录制行 -->
+          <div class="slider-label">触发组合</div> <!-- 名称 -->
+          <span id="kb-combo" class="kb-combo">未设置</span> <!-- 当前组合键文本 -->
+          <button class="btn" id="kb-record">录制</button> <!-- 开始/取消录制 -->
+        </div>
+        <div class="faint" id="kb-record-hint">点击「录制」后按下组合键；修饰键（Ctrl/Shift/Alt/Win）会自动识别，Esc 取消。</div> <!-- 录制提示 -->
+
+        <div class="dim">动作类型</div> <!-- 动作类型区标题 -->
+        <div id="kb-kinds" class="chips-row"></div> <!-- 动作类型 chips（动态渲染） -->
+
+        <div class="dim">目标</div> <!-- 目标区标题 -->
+        <div id="kb-target"></div> <!-- 目标选择区（按动作类型渲染按键/鼠标键） -->
+
+        <div class="dim" id="kb-subs-label">子命令</div> <!-- 子命令区标题 -->
+        <div id="kb-subs" class="chips-row"></div> <!-- 子命令 chips（最多 3 个） -->
+
+        <div class="dim" id="kb-states-label">生效状态条件（不选则始终生效）</div> <!-- 状态条件标题 -->
+        <div id="kb-states" class="chips-row"></div> <!-- 状态 chips：未选 / = 真 / = 假 循环切换 -->
+        <div id="kb-state-logic" class="chips-row"></div> <!-- 条件组合方式：逻辑或 / 逻辑与 -->
+
+        <div class="faint">按住语义：按下触发键执行动作并保持，松开时释放；鼠标长按类动作在按下时锁存、再次按下释放。</div> <!-- 按住语义说明 -->
+      </div>
+    </div>
+  </div>
+
+  <div id="kb-tip" class="tip"></div> <!-- 悬浮提示气泡（keymacro.js 动态定位） -->
+
+  <script src="keymacro.js"></script> <!-- 键盘映射窗口前端逻辑脚本 -->
+</body>
+</html>

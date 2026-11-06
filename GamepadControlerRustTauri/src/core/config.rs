@@ -48,6 +48,8 @@ const K_TYPE_RELEASE_MOUSE_TOGGLE: &str = "releaseMouseToggle";
 const K_TYPE_SWAP_MOUSE_TOGGLE: &str = "swapMouseToggle";
 const K_TYPE_FINE_LOOK: &str = "fineLook";
 const K_TYPE_TOGGLE_OVERLAY_EXPAND: &str = "toggleOverlayExpand";
+// 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键
+const K_TYPE_STATE_MACRO: &str = "stateMacro";
 
 // =====================================================================
 // 序列化：ControllerProfile -> JSON 文本
@@ -74,6 +76,14 @@ pub fn profile_to_json(profile: &ControllerProfile) -> Value {
         "overlayOpacity": profile.global_settings.overlay_opacity,
         "wowExe": profile.global_settings.wow_exe,
         "wowExeHistory": profile.global_settings.wow_exe_history,
+        "stateReadEnabled": profile.global_settings.state_read_enabled,
+        "stateReadIntervalMs": profile.global_settings.state_read_interval_ms,
+        "statePixelX": profile.global_settings.state_pixel_x,
+        "statePixelY": profile.global_settings.state_pixel_y,
+        // 物理键盘组合键映射总开关
+        "keyboardRulesEnabled": profile.global_settings.keyboard_rules_enabled,
+        // 调试日志开关
+        "debugLog": profile.global_settings.debug_log,
     });
     // 【Rust 语法】`as_object_mut()`：把 Value 转成 `Option<&mut Map>`（可变借用其中的对象）；`expect("object")`：若是 Some 则取出值，若是 None 则 panic 并输出提示信息（这里对象必然存在）。
     gs.as_object_mut().expect("object");
@@ -99,12 +109,19 @@ pub fn profile_to_json(profile: &ControllerProfile) -> Value {
         }));
     }
 
+    // 物理键盘组合键规则：逐条序列化（复用 KeyMapping 的动作/状态条件结构）
+    let mut kb_rules = Vec::new();
+    for rule in &profile.keyboard_rules {
+        kb_rules.push(keyboard_rule_to_json(rule));
+    }
+
     // 【Rust 语法】`json!` 宏的最后一个表达式直接作为函数返回值（没有分号）；字段值可以是变量（gs/sets）或常量（CONFIG_VERSION）。
     json!({
         "version": CONFIG_VERSION,
         "globalSettings": gs,
         "activeOperationSet": profile.active_operation_set_id,
         "operationSets": sets,
+        "keyboardRules": kb_rules,
     })
 }
 
@@ -146,6 +163,7 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
         operation_sets: Vec::new(),
         active_operation_set_id: String::new(),
         global_settings: GlobalSettings::default(),
+        keyboard_rules: Vec::new(),
     };
 
     // ---- 全局设置：可缺省，逐字段带默认值读取 ----
@@ -181,6 +199,14 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
             }
         }
         // 把组装好的全局设置赋回 profile。
+        s.state_read_enabled = bool_(gs, "stateReadEnabled", false);
+        s.state_read_interval_ms = int_(gs, "stateReadIntervalMs", 50).clamp(10, 2000) as u32;
+        s.state_pixel_x = int_(gs, "statePixelX", 10);
+        s.state_pixel_y = int_(gs, "statePixelY", 10);
+        // 物理键盘组合键总开关（缺省开启，保持旧配置行为不变）
+        s.keyboard_rules_enabled = bool_(gs, "keyboardRulesEnabled", true);
+        // 调试日志开关（缺省关闭）
+        s.debug_log = bool_(gs, "debugLog", false);
         profile.global_settings = s;
     }
 
@@ -296,8 +322,64 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
         profile.active_operation_set_id = "Set1".to_string();
     }
 
+    // ---- 物理键盘组合键规则（可缺省，旧配置没有该字段） ----
+    if let Some(Value::Array(arr)) = root.get("keyboardRules") {
+        for v in arr {
+            if let Some(rule) = parse_keyboard_rule(v) {
+                // 同一 id 重复出现时只保留第一条，避免运行时匹配到重复触发
+                if !profile.keyboard_rules.iter().any(|r| r.id == rule.id) {
+                    profile.keyboard_rules.push(rule);
+                }
+            }
+        }
+    }
+
     // 【Rust 语法】`Ok(profile)`：Result 的成功变体，把 profile 包装为 Ok 返回（无分号，函数返回值）。
     Ok(profile)
+}
+
+// =====================================================================
+// 物理键盘组合键规则：序列化 / 解析
+// =====================================================================
+
+/// 单条键盘规则 -> JSON（动作与状态条件复用 mapping_to_json）
+fn keyboard_rule_to_json(rule: &KeyboardRule) -> Value {
+    json!({
+        "id": rule.id,
+        "enabled": rule.enabled,
+        "ctrl": rule.ctrl,
+        "shift": rule.shift,
+        "alt": rule.alt,
+        "win": rule.win,
+        // 主键（Android KeyCode）
+        "keyCode": rule.key_code,
+        "mapping": mapping_to_json(&rule.mapping),
+    })
+}
+
+/// JSON -> 单条键盘规则；缺少 mapping / id / 主键时视为非法条目跳过
+fn parse_keyboard_rule(v: &Value) -> Option<KeyboardRule> {
+    if !v.is_object() {
+        return None;
+    }
+    // 没有合法 id 或主键的规则无法匹配，直接跳过
+    let id = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+    let key_code = v.get("keyCode").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+    if id == 0 || key_code == 0 {
+        return None;
+    }
+    // 动作与状态条件复用映射解析逻辑
+    let mapping = parse_mapping(v.get("mapping")?)?;
+    Some(KeyboardRule {
+        id,
+        enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
+        ctrl: v.get("ctrl").and_then(|x| x.as_bool()).unwrap_or(false),
+        shift: v.get("shift").and_then(|x| x.as_bool()).unwrap_or(false),
+        alt: v.get("alt").and_then(|x| x.as_bool()).unwrap_or(false),
+        win: v.get("win").and_then(|x| x.as_bool()).unwrap_or(false),
+        key_code,
+        mapping,
+    })
 }
 
 // =====================================================================
@@ -339,6 +421,7 @@ fn action_to_json(action: &MappedAction) -> Value {
         // 鼠标精细移动：只输出 type。
         ActionType::FineLook => json!({ "type": K_TYPE_FINE_LOOK }),
         ActionType::ToggleOverlayExpand => json!({ "type": K_TYPE_TOGGLE_OVERLAY_EXPAND }),
+        ActionType::StateMacro => json!({ "type": K_TYPE_STATE_MACRO, "keyCode": action.key_code }),
     }
 }
 
@@ -380,6 +463,9 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
         K_TYPE_SWAP_MOUSE_TOGGLE => Some(MappedAction::swap_mouse_toggle()),
         K_TYPE_FINE_LOOK => Some(MappedAction::fine_look()),
         K_TYPE_TOGGLE_OVERLAY_EXPAND => Some(MappedAction::toggle_overlay_expand()),
+        K_TYPE_STATE_MACRO => Some(MappedAction::state_macro(
+            obj.get("keyCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+        )),
         _ => None, // 未知类型
     }
 }
@@ -394,6 +480,12 @@ fn mapping_to_json(mapping: &KeyMapping) -> Value {
         "longPress": mapping.long_press.as_ref().map(|a| action_to_json(a)),
         "longPressSubCommands": mapping.long_press_subs,
         "longPressMs": mapping.long_press_ms,
+        // 状态条件（为空时不写，保持旧配置简洁）
+        "stateConditions": mapping.state_conditions.iter().map(|c| json!({
+            "stateId": c.state_id,
+            "expected": c.expected,
+        })).collect::<Vec<Value>>(),
+        "stateLogic": mapping.state_logic.as_str(),
     })
 }
 
@@ -445,6 +537,23 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         .and_then(|v| v.as_i64())
         .map(|v| v.clamp(100, 5000) as u32)
         .unwrap_or(KeyMapping::DEFAULT_LONG_PRESS_MS);
+    // 状态条件：可选数组，每项为 { stateId, expected }
+    let mut conditions: Vec<StateCond> = Vec::new();
+    if let Some(Value::Array(arr)) = obj.get("stateConditions") {
+        for v in arr {
+            let id = v.get("stateId").and_then(|x| x.as_str()).unwrap_or("");
+            if id.is_empty() {
+                continue;
+            }
+            conditions.push(StateCond {
+                state_id: id.to_string(),
+                expected: v.get("expected").and_then(|x| x.as_bool()).unwrap_or(true),
+            });
+        }
+    }
+    let state_logic = StateLogic::from_str(
+        obj.get("stateLogic").and_then(|x| x.as_str()).unwrap_or("or"),
+    );
     // 【Rust 语法】结构体字面量：`action` 是字段名简写——等价于 `action: action`，即变量名与字段名相同可省略冒号部分。
     Some(KeyMapping {
         action,
@@ -452,6 +561,8 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         long_press,
         long_press_subs: long_subs,
         long_press_ms,
+        state_conditions: conditions,
+        state_logic,
     })
 }
 

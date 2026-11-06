@@ -29,6 +29,12 @@ pub mod steam_input;
 pub mod xinput_source;
 // 【Rust 语法】pub mod：声明公开子模块 wow_sender（按 exe 定位目标窗口并投递键盘消息）
 pub mod wow_sender;
+// 【Rust 语法】pub mod：声明公开子模块 state_reader（像素点读取角色状态）
+pub mod state_reader;
+// 【Rust 语法】pub mod：声明公开子模块 keyboard_source（物理键盘组合键监听）
+pub mod keyboard_source;
+// 【Rust 语法】pub mod：声明公开子模块 debug_log（调试日志开关）
+pub mod debug_log;
 
 // 【Rust 语法】pub use 重导出：把 app::AppCore 提升到 core 模块顶层，外部可直接用 crate::core::AppCore 引用
 pub use app::AppCore;
@@ -56,7 +62,7 @@ pub enum UiEvent {
     /// 鼠标长按锁存状态变化（悬浮窗橙色警示 / 边框高亮）
     // 【Rust 语法】struct 风格变体：用命名大括号携带多个不同类型字段
     MouseToggleChanged {
-        button: input_types::ControllerButton, // 触发锁存的手柄按钮
+        button: input_types::TriggerId, // 触发锁存的来源（手柄按钮 / 物理键盘规则）
         mb: input_types::MouseButton, // 被锁存的鼠标按键
         active: bool, // 锁存状态是否激活
     },

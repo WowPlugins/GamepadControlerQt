@@ -45,7 +45,43 @@ pub enum ActionType {
     SwapMouseToggle, // 交换鼠标左右键长按锁存
     FineLook, // 鼠标精细移动（右摇杆低灵敏度，按住生效）
     ToggleOverlayExpand, // 切换悬浮窗展开/收起状态
+    StateMacro, // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键（受状态条件约束）
 } // 结束 ActionType 枚举定义
+
+// ---------------------------------------------------------------------
+// StateCondition —— 映射生效的角色状态条件
+// state_id 与 WoW 插件 SLState 的 STATE_DEFS 顺序一致
+// ---------------------------------------------------------------------
+/// 多条状态条件之间的组合方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateLogic {
+    Or,  // 逻辑或：任一条件满足即可
+    And, // 逻辑与：全部条件都满足才可
+}
+
+impl StateLogic {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StateLogic::Or => "or",
+            StateLogic::And => "and",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("and") {
+            StateLogic::And
+        } else {
+            StateLogic::Or
+        }
+    }
+}
+
+/// 单条状态条件：期望某个角色状态为真或为假
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateCond {
+    pub state_id: String, // 状态 id（stealthed / chatOpen / ...）
+    pub expected: bool,   // 期望值（true = 状态为真）
+}
 
 // MappedAction 含 Option<String>（layer_name），不能 Copy，只 Clone。
 // 【Rust 语法】#[derive(...)] 派生宏：实现 Debug / Clone / PartialEq / Eq（因字段含 String，无法实现 Copy）。
@@ -191,6 +227,15 @@ impl MappedAction {
             layer_name: None,
         }
     }
+    /// 构造状态宏动作：code 为最终要发送的主键（子命令作为组合键修饰）
+    pub fn state_macro(code: i32) -> Self {
+        Self {
+            r#type: ActionType::StateMacro,
+            key_code: code,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
 } // 结束 impl MappedAction 块
 
 // ---------------------------------------------------------------------
@@ -209,6 +254,10 @@ pub struct KeyMapping {
     pub long_press_subs: Vec<i32>,
     /// 长按判定阈值（毫秒），默认 500
     pub long_press_ms: u32,
+    /// 状态条件：满足后才执行本次映射（为空表示无约束，始终生效）
+    pub state_conditions: Vec<StateCond>,
+    /// 多条状态条件的组合方式
+    pub state_logic: StateLogic,
 } // 结束 KeyMapping 结构体定义
 
 impl Default for KeyMapping {
@@ -219,6 +268,8 @@ impl Default for KeyMapping {
             long_press: None,
             long_press_subs: Vec::new(),
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS,
+            state_conditions: Vec::new(),
+            state_logic: StateLogic::Or,
         }
     }
 }
@@ -238,6 +289,25 @@ impl KeyMapping {
             long_press: None,
             long_press_subs: Vec::new(),
             long_press_ms: Self::DEFAULT_LONG_PRESS_MS,
+            state_conditions: Vec::new(),
+            state_logic: StateLogic::Or,
+        }
+    }
+
+    /// 判断当前角色状态是否满足本映射的条件（无条件下恒为 true）
+    pub fn state_allows(&self, state_reader: impl Fn(&str) -> Option<bool>) -> bool {
+        if self.state_conditions.is_empty() {
+            return true;
+        }
+        match self.state_logic {
+            StateLogic::Or => self
+                .state_conditions
+                .iter()
+                .any(|c| state_reader(&c.state_id).unwrap_or(false) == c.expected),
+            StateLogic::And => self
+                .state_conditions
+                .iter()
+                .all(|c| state_reader(&c.state_id).unwrap_or(false) == c.expected),
         }
     }
 
@@ -264,6 +334,7 @@ impl KeyMapping {
             ActionType::SwapMouseToggle => parts.push("交换鼠标左右键锁存".to_string()), // 交换锁存描述
             ActionType::FineLook => parts.push("鼠标精细移动".to_string()), // 精细移动描述
             ActionType::ToggleOverlayExpand => parts.push("切换悬浮窗展开".to_string()), // 切换悬浮窗展开/收起描述
+            ActionType::StateMacro => parts.push(format!("解锁右键+居中+按键 {}", key_code_to_name(self.action.key_code))), // 解锁+居中+发送组合键
         } // 结束 match 表达式
         // 【Rust 语法】for ... in 循环：`&self.sub_commands` 是对数组的不可变借用（不转移所有权），每次迭代 `sub` 绑定为元素引用 &i32。
         for sub in &self.sub_commands {
@@ -273,6 +344,27 @@ impl KeyMapping {
         parts.join("+") // 【Rust 语法】最后一个表达式即函数返回值；join 方法用 "+" 连接字符串数组并返回 String
     } // 结束 describe 函数
 } // 结束 impl KeyMapping 块
+
+// ---------------------------------------------------------------------
+// KeyboardRule —— 物理键盘组合键映射规则
+// 修饰键 + 主键 命中后执行 mapping；mapping 复用 KeyMapping（动作 /
+// 子命令 / 状态条件），但不使用长按（触发源由键盘钩子驱动，无 Tick）。
+// ---------------------------------------------------------------------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyboardRule {
+    /// 稳定规则 id（删除后不复用）
+    pub id: u32,
+    /// 是否启用本规则
+    pub enabled: bool,
+    pub ctrl: bool,  // 是否要求按住 Ctrl
+    pub shift: bool, // 是否要求按住 Shift
+    pub alt: bool,   // 是否要求按住 Alt
+    pub win: bool,   // 是否要求按住 Win
+    /// 主键（Android KeyCode，运行时转换为 Windows VK 做匹配）
+    pub key_code: i32,
+    /// 命中后执行的动作与状态条件
+    pub mapping: KeyMapping,
+}
 
 // ---------------------------------------------------------------------
 // OperationLayer —— 操作层（一组按键映射）
@@ -337,6 +429,18 @@ pub struct GlobalSettings {
     pub wow_exe: String,
     /// 历史选择过的 WoW 可执行文件路径（最近优先，数量有限）
     pub wow_exe_history: Vec<String>,
+    /// 是否启用角色状态读取（读取 SLState 插件暴露的状态）
+    pub state_read_enabled: bool,
+    /// 角色状态读取周期（毫秒）
+    pub state_read_interval_ms: u32,
+    /// 像素点方案：锚点左上角 X 坐标（物理像素）
+    pub state_pixel_x: i32,
+    /// 像素点方案：锚点左上角 Y 坐标（物理像素）
+    pub state_pixel_y: i32,
+    /// 是否启用物理键盘组合键映射（总开关）
+    pub keyboard_rules_enabled: bool,
+    /// 是否开启调试日志（开启后输出到控制台，默认关闭）
+    pub debug_log: bool,
 } // 结束 GlobalSettings 结构体定义
 
 // 【Rust 语法】为 GlobalSettings 实现 Default trait（特性）：提供一套默认值，之后可用 `GlobalSettings::default()` 便捷创建实例。
@@ -360,6 +464,12 @@ impl Default for GlobalSettings {
             overlay_opacity: 0.8, // 悬浮窗透明度默认 0.8
             wow_exe: String::new(), // 默认未选择目标程序
             wow_exe_history: Vec::new(), // 默认无历史记录
+            state_read_enabled: false, // 默认不读取角色状态
+            state_read_interval_ms: 50, // 默认 50ms 读取一次
+            state_pixel_x: 10, // 默认锚点在屏幕左上角 10px 处
+            state_pixel_y: 10, // 默认锚点在屏幕左上角 10px 处
+            keyboard_rules_enabled: true, // 默认启用物理键盘组合键映射
+            debug_log: false, // 默认关闭调试日志
         } // 结束 Self 结构体字面量
     } // 结束 default 函数
 } // 结束 impl Default for GlobalSettings 块
@@ -423,6 +533,8 @@ pub struct ControllerProfile {
     /// 当前激活的操作集 id
     pub active_operation_set_id: String, // 当前处于激活状态的操作集 id
     pub global_settings: GlobalSettings, // 全局设置
+    /// 物理键盘组合键映射规则（跨操作集共享）
+    pub keyboard_rules: Vec<KeyboardRule>,
 } // 结束 ControllerProfile 结构体定义
 
 // 【Rust 语法】impl 块：为 ControllerProfile 实现方法。
@@ -543,6 +655,7 @@ impl ControllerProfile {
             operation_sets: vec![OperationSet::create_empty("Set1", "默认操作集")], // 初始含 1 个名为"默认操作集"的 Set1
             active_operation_set_id: "Set1".to_string(), // 默认激活 Set1
             global_settings: GlobalSettings::default(), // 全局设置取默认值
+            keyboard_rules: Vec::new(), // 默认无键盘映射规则
         }; // 结束 Self 结构体字面量
         // 【Rust 语法】expect("...")：Option/Result 为 None/Err 时以给定信息 panic；此处确定存在默认集，不会失败，安全解包。
         let common = p.common_layer_mut().expect("default set exists"); // 获取激活操作集公共层的可变引用

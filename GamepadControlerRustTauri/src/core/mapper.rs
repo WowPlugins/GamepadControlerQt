@@ -21,7 +21,7 @@
 // 【Rust 语法】use 导入语句：导入本 crate 内 core 模块下的 InputInjector（注入器接口，封装 Windows SendInput）。
 use crate::core::injector::InputInjector;
 // 【Rust 语法】use 花括号导入：从同一模块按需导入多个符号（android_key 键码常量、手柄按钮/摇杆/鼠标键枚举）。
-use crate::core::input_types::{android_key, ControllerButton, ControllerStick, MouseButton};
+use crate::core::input_types::{android_key, ControllerStick, MouseButton, TriggerId};
 // 【Rust 语法】use 花括号导入：导入映射引擎的动作类型枚举 ActionType 与按键映射结构体 KeyMapping。
 use crate::core::mapping_types::{ActionType, KeyMapping, MappedAction};
 // 【Rust 语法】use 导入语句：导入 UI 事件类型 UiEvent（用于向 UI 线程发通知）。
@@ -149,32 +149,32 @@ fn send_stick_key(kc: i32, down: bool, hwnd: Option<isize>, injector: &InputInje
 #[derive(Default)]
 // 【Rust 语法】struct 结构体：记录各手柄按钮当前已注入的键鼠状态，供松开时精确释放。
 pub struct MapperState {
-    /// 按钮 -> 主键 keyCode
-    pub pressed_main_keys: HashMap<ControllerButton, i32>, // 当前按下的主键记录（手柄按钮 -> 键码）
-    /// 按钮 -> 已按下的子命令
-    pub pressed_sub_keys: HashMap<ControllerButton, Vec<i32>>, // 已按下的组合键子命令记录
-    /// 按钮 -> 鼠标键
-    pub pressed_mouse_buttons: HashMap<ControllerButton, MouseButton>, // 当前按下的鼠标键记录
-    /// 按钮 -> 鼠标单击来源层 id（需求6：释放层时只释放该层内产生的鼠标锁存）
-    pub pressed_mouse_layer: HashMap<ControllerButton, String>,
+    /// 触发源 -> 主键 keyCode（触发源为手柄按键或物理键盘规则）
+    pub pressed_main_keys: HashMap<TriggerId, i32>, // 当前按下的主键记录（触发源 -> 键码）
+    /// 触发源 -> 已按下的子命令
+    pub pressed_sub_keys: HashMap<TriggerId, Vec<i32>>, // 已按下的组合键子命令记录
+    /// 触发源 -> 鼠标键
+    pub pressed_mouse_buttons: HashMap<TriggerId, MouseButton>, // 当前按下的鼠标键记录
+    /// 触发源 -> 鼠标单击来源层 id（需求6：释放层时只释放该层内产生的鼠标锁存）
+    pub pressed_mouse_layer: HashMap<TriggerId, String>,
     /// WASD 当前按下的 keyCode
     pub left_stick_pressed_keys: HashSet<i32>, // 左摇杆 WASD 当前按下的键码集合
     /// 左摇杆按键是否正通过 PostMessage 直发目标窗口
     pub stick_keys_via_post: bool,
-    /// 长按保持（MouseToggle）的鼠标键：按钮 -> 鼠标键
-    pub toggled_mouse_buttons: HashMap<ControllerButton, MouseButton>, // MouseToggle 锁存的鼠标键记录
-    /// 按钮 -> 鼠标锁存来源层 id（需求6）
-    pub toggled_mouse_layer: HashMap<ControllerButton, String>,
+    /// 长按保持（MouseToggle）的鼠标键：触发源 -> 鼠标键
+    pub toggled_mouse_buttons: HashMap<TriggerId, MouseButton>, // MouseToggle 锁存的鼠标键记录
+    /// 触发源 -> 鼠标锁存来源层 id（需求6）
+    pub toggled_mouse_layer: HashMap<TriggerId, String>,
     /// 无按钮来源的额外锁存（交换左右键锁存后产生）
     pub extra_toggled: HashSet<MouseButton>,
     /// WASD 拦截自动锁定的鼠标右键
     pub auto_locked_right: bool,
     /// 自动锁定前保存的光标位置（解锁时还原）
     pub auto_lock_saved_pos: Option<(i32, i32)>,
-    /// 待判定的长按：按钮 -> 长按信息
-    pub pending_long_press: HashMap<ControllerButton, PendingLongPress>,
-    /// 已触发长按的按钮（松开时按长按动作释放）
-    pub long_press_buttons: HashSet<ControllerButton>,
+    /// 待判定的长按：触发源 -> 长按信息
+    pub pending_long_press: HashMap<TriggerId, PendingLongPress>,
+    /// 已触发长按的触发源（松开时按长按动作释放）
+    pub long_press_buttons: HashSet<TriggerId>,
     /// 缓存的 WoW 窗口句柄（0 = 无，isize 保证状态可跨线程）
     pub wow_hwnd: isize,
     /// 缓存窗口对应的 exe 路径
@@ -215,7 +215,7 @@ impl MapperState {
         injector.release_all(); // 让注入器一次性松开所有物理按键/鼠标键
         // 先复制再清空，逐个通知 UI 解除锁存提示
         // 【Rust 语法】drain() 方法：取出并清空 HashMap 的全部键值对并返回迭代器；collect() 把迭代器收集为 Vec（元组向量）。
-        let toggled: Vec<(ControllerButton, MouseButton)> =
+        let toggled: Vec<(TriggerId, MouseButton)> =
             self.toggled_mouse_buttons.drain().collect(); // 把全部锁存记录取出并收集为向量
         // 【Rust 语法】for 循环 + 元组解构：每次迭代把 (按钮, 鼠标键) 元组拆解到 button、mb 两个变量。
         for (button, mb) in toggled {
@@ -249,7 +249,7 @@ impl MapperState {
     /// 按「已注入状态」释放某按钮的全部注入（子命令逆序 -> 主键 -> 鼠标）。
     /// 注意：不处理 MouseToggle 锁存（toggle 由用户主动锁存，松开不改变状态）。
     // 【Rust 语法】方法：`&mut self` 可变借用（需要从记录中移除条目）。
-    pub fn release_button_injection(&mut self, button: ControllerButton, injector: &InputInjector) {
+    pub fn release_button_injection(&mut self, button: TriggerId, injector: &InputInjector) {
         // 释放子命令与主键（顺序与注入相反：非修饰子命令 -> 主键 -> 修饰子命令）
         // 【组合键顺序】修饰键（Alt/Ctrl/Shift）必须最后释放，与注入时的"最先按下"对称，
         // 否则 Alt 先于主键松开，游戏（如魔兽）识别不到完整组合键。
@@ -284,7 +284,7 @@ impl MapperState {
     // 【Rust 语法】方法：`&mut self` 可变借用；mapping/injector/event_tx 均为引用（只读借用注入器与事件通道）。
     pub fn handle_button(
         &mut self, // 可变借用自身（需要记录/释放注入状态）
-        button: ControllerButton, // 触发的手柄按钮
+        button: TriggerId, // 触发的手柄按钮
         is_pressed: bool, // 是否按下（true 按下 / false 松开）
         mapping: &KeyMapping, // 命中的按键映射（只读借用）
         layer_id: &str, // 映射所在层 id（需求6：记录鼠标锁存来源）
@@ -345,7 +345,7 @@ impl MapperState {
         }
         let now = Instant::now(); // 当前时刻
         // 收集已满足阈值的按钮（先收集再处理，避免遍历时修改容器）
-        let fired: Vec<ControllerButton> = self
+        let fired: Vec<TriggerId> = self
             .pending_long_press
             .iter()
             .filter(|(_, p)| now.duration_since(p.started).as_millis() as u64 >= p.threshold_ms as u64)
@@ -364,7 +364,7 @@ impl MapperState {
     /// 执行一次按下动作（短按与长按共用）
     fn execute_press(
         &mut self,
-        button: ControllerButton,
+        button: TriggerId,
         action: &MappedAction,
         subs: &[i32],
         layer_id: &str,
@@ -390,6 +390,9 @@ impl MapperState {
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
             ActionType::FineLook => look.set_fine_look(true), // 精细移动：按下进入（需求7）
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
+            ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
+                self.handle_state_macro(button, action.key_code, subs, injector, event_tx);
+            }
             // 【Rust 语法】模式 `|`（或）匹配：多个变体共享同一分支代码。
             ActionType::SwitchLayer // 切换层动作
             | ActionType::ToggleMapping // 切换映射
@@ -406,7 +409,7 @@ impl MapperState {
     // 【Rust 语法】私有方法（无 pub 修饰）：`&[i32]` 是切片类型，可看作对数组/向量元素的借用视图。
     fn handle_keyboard_key(
         &mut self, // 可变借用自身（需要记录主键/子命令按下状态）
-        button: ControllerButton, // 触发的手柄按钮
+        button: TriggerId, // 触发的手柄按钮
         main_key_code: i32, // 主键键码
         subs: &[i32], // 子命令键码切片（只读借用）
         injector: &InputInjector, // 注入器引用（只读）
@@ -448,7 +451,7 @@ impl MapperState {
     // 【Rust 语法】私有方法：`&mut self` 可变借用（需记录子命令按下状态）。
     fn handle_wheel(
         &mut self, // 可变借用自身（需要记录子命令按下状态）
-        button: ControllerButton, // 触发的手柄按钮
+        button: TriggerId, // 触发的手柄按钮
         dir: i32, // 滚动方向（1 上滚 / -1 下滚）
         subs: &[i32], // 子命令键码切片（只读借用）
         injector: &InputInjector, // 注入器引用（只读）
@@ -480,7 +483,7 @@ impl MapperState {
     // 【Rust 语法】私有方法：`&mut self` 可变借用。
     fn handle_mouse_click(
         &mut self, // 可变借用自身（需要记录鼠标键按下状态）
-        button: ControllerButton, // 触发的手柄按钮
+        button: TriggerId, // 触发的手柄按钮
         mb: MouseButton, // 要按下的鼠标键
         layer_id: &str, // 映射所在层 id
         injector: &InputInjector, // 注入器引用（只读）
@@ -498,7 +501,7 @@ impl MapperState {
     // 【Rust 语法】私有方法：`&mut self` 可变借用；event_tx 为事件通道发送端引用。
     fn handle_mouse_toggle(
         &mut self, // 可变借用自身（需要读写锁存记录）
-        button: ControllerButton, // 触发的手柄按钮
+        button: TriggerId, // 触发的手柄按钮
         mb: MouseButton, // 要锁存的鼠标键
         layer_id: &str, // 映射所在层 id
         injector: &InputInjector, // 注入器引用（只读）
@@ -524,6 +527,61 @@ impl MapperState {
             }); // 结束事件构造与发送
         } // 结束 else 分支
     } // 结束 handle_mouse_toggle 函数
+
+    // -----------------------------------------------------------------
+    // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
+    // -----------------------------------------------------------------
+    /// 先解除所有右键锁存（含按钮锁存与 WASD 拦截自动锁定），把光标移到
+    /// 屏幕中央，再按住目标组合键；松开时由 release_button_injection 精确释放。
+    fn handle_state_macro(
+        &mut self,
+        button: TriggerId,
+        key_code: i32,
+        subs: &[i32],
+        injector: &InputInjector,
+        event_tx: &Sender<UiEvent>,
+    ) {
+        // 1) 解除所有右键锁存
+        let mut released = false; // 是否实际解锁过（决定是否需要等待）
+        let right_toggled: Vec<TriggerId> = self
+            .toggled_mouse_buttons
+            .iter()
+            .filter(|(_, mb)| **mb == MouseButton::Right)
+            .map(|(b, _)| *b)
+            .collect();
+        for b in right_toggled {
+            self.toggled_mouse_buttons.remove(&b); // 清掉按钮锁存记录
+            self.toggled_mouse_layer.remove(&b); // 清掉来源层记录
+            injector.send_mouse_up(MouseButton::Right); // 松开右键
+            let _ = event_tx.send(UiEvent::MouseToggleChanged {
+                button: b,
+                mb: MouseButton::Right,
+                active: false,
+            });
+            released = true;
+        }
+        if self.extra_toggled.remove(&MouseButton::Right) {
+            injector.send_mouse_up(MouseButton::Right); // 松开交换/自动产生的右键锁存
+            released = true;
+        }
+        if self.auto_locked_right {
+            self.release_auto_right_lock(injector); // 释放 WASD 拦截自动锁定的右键
+            released = true;
+        }
+        if released {
+            thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 等游戏处理抬起事件
+        }
+
+        // 2) 光标移到屏幕中央
+        let (w, h) = injector.screen_size();
+        injector.set_cursor_pos(w / 2, h / 2);
+        thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待光标就位
+
+        // 3) 按住目标组合键（主键 + 子命令）
+        if key_code != 0 {
+            self.handle_keyboard_key(button, key_code, subs, injector);
+        }
+    } // 结束 handle_state_macro 函数
 
     // -----------------------------------------------------------------
     // 需求1：交互键
@@ -569,7 +627,7 @@ impl MapperState {
     fn handle_release_mouse_toggle(&mut self, injector: &InputInjector, event_tx: &Sender<UiEvent>) {
         // 释放所有由手柄按钮建立的锁存
         let mut released = false; // 是否实际释放过鼠标锁存（决定是否需要等待）
-        let toggled: Vec<(ControllerButton, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
+        let toggled: Vec<(TriggerId, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
         for (button, mb) in toggled {
             injector.send_mouse_up(mb); // 松开锁存的鼠标键
             let _ = event_tx.send(UiEvent::MouseToggleChanged { button, mb, active: false });
@@ -604,7 +662,7 @@ impl MapperState {
         }
 
         // 2) 全部释放现有锁存（含自动锁定，释放后光标还原）
-        let toggled: Vec<(ControllerButton, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
+        let toggled: Vec<(TriggerId, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
         for (_, mb) in &toggled {
             injector.send_mouse_up(*mb);
         }
@@ -688,7 +746,7 @@ impl MapperState {
             return; // 公共层不参与释放（公共层的锁存由用户主动解除）
         }
         // 1) 该层内按下未松开的鼠标单击
-        let pressed: Vec<ControllerButton> = self
+        let pressed: Vec<TriggerId> = self
             .pressed_mouse_layer
             .iter()
             .filter(|(_, l)| l.as_str() == layer_id)
@@ -704,7 +762,7 @@ impl MapperState {
             self.pressed_mouse_layer.remove(&button); // 清理来源层标记
         }
         // 2) 该层内建立的鼠标长按锁存
-        let toggled: Vec<(ControllerButton, MouseButton)> = self
+        let toggled: Vec<(TriggerId, MouseButton)> = self
             .toggled_mouse_layer
             .iter()
             .filter(|(_, l)| l.as_str() == layer_id)

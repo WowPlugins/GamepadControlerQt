@@ -8,7 +8,7 @@
 // 【Rust 语法】use 导入：crate:: 表示从本 crate 根开始定位；::* 通配导入模块全部公开项；花括号内为多个具名项
 use crate::core::config_manager; // 导入配置管理模块（保存 / 加载 / 重置）
 use crate::core::input_types::*; // 通配导入手柄输入类型：按钮枚举与显示名转换函数
-use crate::core::mapping_types::{ActionType, KeyMapping, MappedAction}; // 导入映射动作类型、按键映射结构体
+use crate::core::mapping_types::{ActionType, KeyMapping, KeyboardRule, MappedAction, StateCond, StateLogic}; // 导入映射动作类型、按键映射、键盘规则结构体、状态条件
 use crate::AppState; // 导入主程序定义的全局共享状态结构体
 use serde::{Deserialize, Serialize}; // serde 序列化框架：派生 trait 的基础（JSON 与结构体互转）
 use std::sync::atomic::Ordering; // 原子操作的内存序（用于原子标志的读写）
@@ -53,6 +53,12 @@ pub struct Snapshot { // 主窗口整体状态快照
     overlay_opacity: f32, // 悬浮窗透明度
     wow_exe: String, // 目标游戏（WoW）可执行文件路径
     wow_exe_history: Vec<String>, // 历史选择过的 WoW 路径（最近优先）
+    state_read_enabled: bool, // 是否启用角色状态读取
+    state_read_interval_ms: u32, // 状态读取周期（毫秒）
+    state_pixel_x: i32, // 像素锚点 X
+    state_pixel_y: i32, // 像素锚点 Y
+    state_bits: u16, // 当前 10 个状态的位图（bit0..bit9）
+    debug_log: bool, // 调试日志开关状态
 } // 结构体结束
 
 // ---------------------------------------------------------------------
@@ -144,7 +150,17 @@ pub struct MappingView { // 单个按键映射的展示视图
     layer_name: Option<String>, // 目标层名称（切换层动作时使用）
     long_press: Option<ActionView>, // 长按动作（None 表示未配置长按）
     long_press_ms: u32, // 长按判定阈值（毫秒）
+    state_conditions: Vec<StateCondView>, // 状态条件列表
+    state_logic: String, // 条件组合方式（or / and）
 } // 结构体结束
+
+/// 状态条件的展示/提交视图
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")] // JSON 字段使用 camelCase（stateId / expected）
+pub struct StateCondView {
+    pub state_id: String, // 状态 id（stealthed / chatOpen / ...）
+    pub expected: bool,   // 期望值
+}
 
 // 【Rust 语法】impl 实现块：为结构体添加关联方法，通过 MappingView::none() 调用（无需实例）
 impl MappingView {
@@ -160,6 +176,8 @@ impl MappingView {
             layer_name: None, // 无目标层名称
             long_press: None, // 无长按动作
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS, // 长按阈值取默认值
+            state_conditions: Vec::new(), // 无条件
+            state_logic: "or".into(), // 默认逻辑或
         } // Self 字面量结束
     } // none 函数结束
 } // impl 块结束
@@ -230,6 +248,7 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
         ActionType::SwapMouseToggle => "交换鼠标左右键锁存".to_string(), // 交换左右键锁存
         ActionType::FineLook => "鼠标精细移动".to_string(), // 右摇杆精细移动
         ActionType::ToggleOverlayExpand => "切换悬浮窗展开/收起".to_string(), // 悬浮窗展开状态切换
+        ActionType::StateMacro => format!("解锁右键+居中+按键: {}", key_code_to_name(a.key_code)), // 解锁+居中+发送组合键
         _ => "（未知）".to_string(), // 【Rust 语法】通配符 _ 分支：兜底匹配所有未列出的枚举值
     } // match 结束
 } // 函数结束
@@ -249,6 +268,7 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::SwapMouseToggle => "swapmousetoggle", // 交换左右键锁存
         ActionType::FineLook => "finelook", // 精细移动
         ActionType::ToggleOverlayExpand => "toggleoverlayexpand", // 切换悬浮窗展开/收起
+        ActionType::StateMacro => "statemacro", // 状态宏
         _ => "keyboard", // 未知类型兜底为 keyboard
     } // match 结束
     .to_string() // 把匹配出的 &str 转为 String（match 是表达式，可直接接方法）
@@ -281,6 +301,7 @@ fn build_action(
         "swapmousetoggle" => Some(MappedAction::swap_mouse_toggle()), // 交换左右键锁存（需求5）
         "finelook" => Some(MappedAction::fine_look()), // 精细移动（需求7）
         "toggleoverlayexpand" => Some(MappedAction::toggle_overlay_expand()), // 切换悬浮窗展开/收起
+        "statemacro" => Some(MappedAction::state_macro(key_code.unwrap_or(0))), // 状态宏：未选键时先建空动作，选键后再更新
         _ => None, // 未知类型不生成动作
     } // match 结束
 } // 函数结束
@@ -338,6 +359,12 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { // 主窗口整体
         overlay_opacity: gs.overlay_opacity,
         wow_exe: gs.wow_exe.clone(), // 目标游戏 exe 路径
         wow_exe_history: gs.wow_exe_history.clone(), // 历史路径列表
+        state_read_enabled: gs.state_read_enabled, // 是否启用状态读取
+        state_read_interval_ms: gs.state_read_interval_ms, // 读取周期
+        state_pixel_x: gs.state_pixel_x, // 像素锚点 X
+        state_pixel_y: gs.state_pixel_y, // 像素锚点 Y
+        state_bits: state.shared.states.load(), // 当前状态位图
+        debug_log: gs.debug_log, // 调试日志开关
     } // Snapshot 字面量结束
 } // 函数结束
 
@@ -364,7 +391,7 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         .held_buttons() // 当前按住的按钮集合
         .iter()
         .map(|b| {
-            let triggered_long = core.mapper.long_press_buttons.contains(b); // 是否已触发长按
+            let triggered_long = core.mapper.long_press_buttons.contains(&TriggerId::Pad(*b)); // 是否已触发长按
             let desc = core
                 .steam
                 .get_effective_mapping(*b) // 查询当前生效映射
@@ -517,6 +544,343 @@ pub fn adjust_setting(state: State<'_, AppState>, key: SettingKey, delta: f32) {
         } // 分支块结束
     } // match 结束
     core.update_global_settings(gs); // 用修改后的设置更新核心
+    drop(core); // 先释放锁，sync 内部还要再加一次
+    state.shared.sync_state_config(); // 同步到像素读取线程
+}
+
+// 开关角色状态读取
+#[tauri::command]
+pub fn set_state_read_enabled(state: State<'_, AppState>, enabled: bool) {
+    {
+        let mut core = state.shared.core.lock().unwrap();
+        let mut gs = core.steam.profile.global_settings.clone();
+        gs.state_read_enabled = enabled;
+        core.update_global_settings(gs);
+    }
+    state.shared.sync_state_config();
+    crate::dbg_log!("状态读取开关 -> {}", if enabled { "开启" } else { "关闭" });
+}
+
+// 设置状态读取周期（毫秒，限幅 10~2000）
+#[tauri::command]
+pub fn set_state_read_interval(state: State<'_, AppState>, ms: u32) {
+    {
+        let mut core = state.shared.core.lock().unwrap();
+        let mut gs = core.steam.profile.global_settings.clone();
+        gs.state_read_interval_ms = ms.clamp(10, 2000);
+        core.update_global_settings(gs);
+    }
+    state.shared.sync_state_config();
+    crate::dbg_log!("状态读取周期 -> {}ms", ms.clamp(10, 2000));
+}
+
+// 设置像素锚点坐标（与插件里 SLStateDB.pixel_x/pixel_y 一致）
+#[tauri::command]
+pub fn set_state_pixel_pos(state: State<'_, AppState>, x: i32, y: i32) {
+    {
+        let mut core = state.shared.core.lock().unwrap();
+        let mut gs = core.steam.profile.global_settings.clone();
+        gs.state_pixel_x = x.max(0);
+        gs.state_pixel_y = y.max(0);
+        core.update_global_settings(gs);
+    }
+    state.shared.sync_state_config();
+    crate::dbg_log!("像素锚点 -> ({}, {})", x.max(0), y.max(0));
+}
+
+// 设置调试日志开关（开启时分配控制台窗口并开始输出日志）
+#[tauri::command]
+pub fn set_debug_log(state: State<'_, AppState>, enabled: bool) {
+    let (read_enabled, interval, px, py) = {
+        let mut core = state.shared.core.lock().unwrap(); // 加锁修改全局设置
+        let mut gs = core.steam.profile.global_settings.clone(); // 克隆一份设置
+        gs.debug_log = enabled; // 更新调试日志开关
+        let info = (
+            gs.state_read_enabled,
+            gs.state_read_interval_ms,
+            gs.state_pixel_x,
+            gs.state_pixel_y,
+        ); // 顺带取出像素读取配置，便于开启时在日志里说明当前采集参数
+        core.update_global_settings(gs); // 写回配置
+        info
+    };
+    if enabled {
+        crate::core::debug_log::set_enabled(true); // 先打开开关（后续日志才能输出）
+        crate::dbg_log!("调试日志已开启");
+        crate::dbg_log!(
+            "状态读取 启用={} 周期={}ms 锚点=({}, {})",
+            read_enabled,
+            interval,
+            px,
+            py
+        );
+        if !read_enabled {
+            crate::dbg_log!("提示：角色状态读取未启用，不会有像素读取日志（请先开启状态读取）");
+        }
+    } else {
+        crate::dbg_log!("调试日志已关闭"); // 关闭前输出最后一条
+        crate::core::debug_log::set_enabled(false); // 再关闭开关并收起控制台
+    }
+}
+
+// ---------------------------------------------------------------------
+// 物理键盘组合键规则
+// ---------------------------------------------------------------------
+
+/// 单条键盘规则的展示视图
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardRuleView {
+    id: u32,                             // 规则 id
+    enabled: bool,                       // 是否启用
+    ctrl: bool,                          // 是否要求 Ctrl
+    shift: bool,                         // 是否要求 Shift
+    alt: bool,                           // 是否要求 Alt
+    win: bool,                           // 是否要求 Win
+    key_code: i32,                       // 主键 Android KeyCode
+    key_name: String,                    // 主键名（如 F1）
+    combo_text: String,                  // 组合键文本（如 Ctrl + Shift + F1）
+    kind: String,                        // 动作类型字符串
+    action_key_code: i32,                // 动作目标键码（keyboard / statemacro 使用）
+    desc: String,                        // 动作描述
+    subs: Vec<String>,                   // 子命令键名列表
+    mouse_button: Option<MouseButton>,   // 鼠标键（Some 表示有）
+    state_conditions: Vec<StateCondView>, // 状态条件列表
+    state_logic: String,                 // or / and
+}
+
+/// 键盘规则列表整体视图
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardRulesView {
+    enabled: bool,                  // 物理键盘映射总开关
+    rules: Vec<KeyboardRuleView>,   // 规则列表
+}
+
+/// 把一条键盘规则转成前端视图
+fn keyboard_rule_view(r: &KeyboardRule) -> KeyboardRuleView {
+    // 拼组合键文本：修饰键在前，主键在后
+    let mut parts: Vec<String> = Vec::new();
+    if r.ctrl {
+        parts.push("Ctrl".to_string());
+    }
+    if r.shift {
+        parts.push("Shift".to_string());
+    }
+    if r.alt {
+        parts.push("Alt".to_string());
+    }
+    if r.win {
+        parts.push("Win".to_string());
+    }
+    parts.push(key_code_to_name(r.key_code));
+    KeyboardRuleView {
+        id: r.id,
+        enabled: r.enabled,
+        ctrl: r.ctrl,
+        shift: r.shift,
+        alt: r.alt,
+        win: r.win,
+        key_code: r.key_code,
+        key_name: key_code_to_name(r.key_code),
+        combo_text: parts.join(" + "),
+        kind: kind_str(&r.mapping.action),
+        action_key_code: r.mapping.action.key_code,
+        desc: describe_action(&r.mapping.action),
+        subs: r
+            .mapping
+            .sub_commands
+            .iter()
+            .map(|&k| key_code_to_name(k))
+            .collect(),
+        mouse_button: Some(r.mapping.action.mouse_button),
+        state_conditions: r
+            .mapping
+            .state_conditions
+            .iter()
+            .map(|c| StateCondView {
+                state_id: c.state_id.clone(),
+                expected: c.expected,
+            })
+            .collect(),
+        state_logic: r.mapping.state_logic.as_str().to_string(),
+    }
+}
+
+// 读取全部键盘规则
+#[tauri::command]
+pub fn get_keyboard_rules(state: State<'_, AppState>) -> KeyboardRulesView {
+    let core = state.shared.core.lock().unwrap();
+    KeyboardRulesView {
+        enabled: core.steam.profile.global_settings.keyboard_rules_enabled,
+        rules: core
+            .steam
+            .profile
+            .keyboard_rules
+            .iter()
+            .map(keyboard_rule_view)
+            .collect(),
+    }
+}
+
+// 新增一条空白规则（默认主键 F1、未启用），返回新规则 id
+#[tauri::command]
+pub fn add_keyboard_rule(state: State<'_, AppState>) -> u32 {
+    let mut core = state.shared.core.lock().unwrap();
+    // 规则 id 取当前最大值 +1（删除后不复用，避免与"已吞键记录"冲突）
+    let id = core
+        .steam
+        .profile
+        .keyboard_rules
+        .iter()
+        .map(|r| r.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    core.steam.profile.keyboard_rules.push(KeyboardRule {
+        id,
+        enabled: false, // 新规则默认不启用，配好组合键与动作后由用户打开
+        ctrl: false,
+        shift: false,
+        alt: false,
+        win: false,
+        key_code: android_key::F1, // 默认主键 F1
+        mapping: KeyMapping::new(MappedAction::keyboard_key(0)), // 空动作（键码 0 表示未设置）
+    });
+    core.profile_rev += 1;
+    drop(core); // 先释放锁，sync 内部还要再加锁
+    state.shared.sync_keyboard();
+    id
+}
+
+// 删除一条键盘规则
+#[tauri::command]
+pub fn delete_keyboard_rule(state: State<'_, AppState>, id: u32) {
+    let mut core = state.shared.core.lock().unwrap();
+    let before = core.steam.profile.keyboard_rules.len();
+    core.steam.profile.keyboard_rules.retain(|r| r.id != id);
+    if core.steam.profile.keyboard_rules.len() != before {
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 启用 / 停用某条规则
+#[tauri::command]
+pub fn set_keyboard_rule_enabled(state: State<'_, AppState>, id: u32, enabled: bool) {
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        r.enabled = enabled;
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 物理键盘映射总开关
+#[tauri::command]
+pub fn set_keyboard_rules_enabled(state: State<'_, AppState>, enabled: bool) {
+    let mut core = state.shared.core.lock().unwrap();
+    let mut gs = core.steam.profile.global_settings.clone();
+    gs.keyboard_rules_enabled = enabled;
+    core.update_global_settings(gs);
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 设置规则的组合键（修饰键 + 主键）
+#[tauri::command]
+pub fn set_keyboard_rule_combo(
+    state: State<'_, AppState>,
+    id: u32,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    win: bool,
+    key_code: i32,
+) {
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        r.ctrl = ctrl;
+        r.shift = shift;
+        r.alt = alt;
+        r.win = win;
+        r.key_code = key_code;
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 设置规则的目标动作（键盘 / 鼠标 / 滚轮 / 状态宏等）
+#[tauri::command]
+pub fn set_keyboard_rule_action(
+    state: State<'_, AppState>,
+    id: u32,
+    kind: String,
+    key_code: Option<i32>,
+    mouse_button: Option<String>,
+) {
+    // 键盘规则没有"切换层"概念，layer_name 固定传 None
+    let Some(action) = (if kind == "none" {
+        // 未设置：置为空键盘动作（键码 0），相当于清除该规则的动作
+        Some(MappedAction::keyboard_key(0))
+    } else {
+        build_action(&kind, key_code, mouse_button, None)
+    }) else {
+        return;
+    };
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        let main_code = action.key_code;
+        r.mapping.action = action;
+        // 子命令与主动作重复时移除，避免组合键自己按自己
+        r.mapping.sub_commands.retain(|k| *k != main_code);
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 切换规则的子命令（组合键）
+#[tauri::command]
+pub fn toggle_keyboard_rule_sub(state: State<'_, AppState>, id: u32, key_code: i32) {
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        if let Some(pos) = r.mapping.sub_commands.iter().position(|&k| k == key_code) {
+            r.mapping.sub_commands.remove(pos); // 已存在则取消
+        } else if r.mapping.sub_commands.len() < KeyMapping::MAX_SUB_COMMANDS {
+            r.mapping.sub_commands.push(key_code); // 未满则追加
+        }
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 设置规则的状态条件（conditions 为空表示始终生效）
+#[tauri::command]
+pub fn set_keyboard_rule_state_conditions(
+    state: State<'_, AppState>,
+    id: u32,
+    conditions: Vec<StateCondView>,
+    logic: String,
+) {
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        r.mapping.state_conditions = conditions
+            .into_iter()
+            .map(|c| StateCond {
+                state_id: c.state_id,
+                expected: c.expected,
+            })
+            .collect();
+        r.mapping.state_logic = StateLogic::from_str(&logic);
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
 }
 
 // ---------------------------------------------------------------------
@@ -540,6 +904,10 @@ pub fn reset_config(state: State<'_, AppState>) { // 重置配置命令
     let def = config_manager::load(); // 重新加载默认配置
     let mut core = state.shared.core.lock().unwrap(); // 加锁取可变访问
     core.load_profile(def); // 把默认配置载入核心（替换当前配置）
+    drop(core); // 释放锁后再同步读取配置
+    state.shared.sync_state_config(); // 让像素读取恢复默认参数
+    state.shared.sync_keyboard(); // 让键盘规则快照恢复默认
+    crate::core::debug_log::set_enabled(false); // 重置后关闭调试日志（默认关闭）
 }
 
 // ---------------------------------------------------------------------
@@ -653,6 +1021,15 @@ pub fn get_mapping(state: State<'_, AppState>, layer_id: String, button: String)
             layer_name: m.action.layer_name.clone(), // 目标层名称（切换层动作时使用）
             long_press: m.long_press.as_ref().map(|lp| action_view(lp, &m.long_press_subs)), // 长按动作视图
             long_press_ms: m.long_press_ms, // 长按阈值
+            state_conditions: m
+                .state_conditions
+                .iter()
+                .map(|c| StateCondView {
+                    state_id: c.state_id.clone(),
+                    expected: c.expected,
+                })
+                .collect(), // 状态条件列表
+            state_logic: m.state_logic.as_str().to_string(), // or / and
         }, // 视图构造结束
         None => MappingView::none(), // 无映射则返回空视图
     } // match 结束
@@ -689,6 +1066,34 @@ pub fn set_mapping( // 写入按键映射命令（多参数，含多个可选参
         } // else 结束
     } // if-let 结束
 } // 函数结束
+
+// 状态条件配置：写入某按键映射的生效条件（conditions 为空表示始终生效）
+#[tauri::command]
+pub fn set_state_conditions(
+    state: State<'_, AppState>,
+    layer_id: String,
+    button: String,
+    conditions: Vec<StateCondView>,
+    logic: String,
+) {
+    let Some(b) = controller_button_from_name(&button) else {
+        return; // 按钮名无效
+    };
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
+        if let Some(m) = layer.button_mappings.get_mut(&b) {
+            m.state_conditions = conditions
+                .into_iter()
+                .map(|c| StateCond {
+                    state_id: c.state_id,
+                    expected: c.expected,
+                })
+                .collect();
+            m.state_logic = StateLogic::from_str(&logic);
+            core.profile_rev += 1;
+        }
+    }
+}
 
 // 长按动作配置：kind 为 None 表示取消长按
 #[tauri::command]

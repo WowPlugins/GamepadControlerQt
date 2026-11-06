@@ -16,6 +16,10 @@ use crate::core::app::AppCore;
 use crate::core::mapper::LookRunner;
 // 【Rust 语法】use 语句：从 core::xinput_source 一次性导入多个项 SourceCallback/SourceEvent/XInputGamepadSource
 use crate::core::xinput_source::{SourceCallback, SourceEvent, XInputGamepadSource};
+// 【Rust 语法】导入像素状态读取器与状态位
+use crate::core::state_reader::{PixelReader, StateBits, StateReadConfig};
+// 【Rust 语法】导入物理键盘组合键监听器
+use crate::core::keyboard_source::KeyboardListener;
 // 【Rust 语法】use 语句：导入标准库原子类型 AtomicBool（原子布尔）与 Ordering（内存序枚举）
 use std::sync::atomic::{AtomicBool, Ordering};
 // 【Rust 语法】use 语句：导入标准库 Arc（原子引用计数智能指针，多线程共享所有权）与 Mutex（互斥锁）
@@ -31,6 +35,14 @@ pub struct AppShared {
     pub source: Arc<Mutex<XInputGamepadSource>>,
     // 【Rust 语法】AtomicBool 原子布尔：无需加锁即可被多线程安全读写，表示映射是否在运行
     pub running: Arc<AtomicBool>,
+    // 角色状态位（像素读取线程写入）
+    pub states: Arc<StateBits>,
+    // 像素读取配置（原子量，运行期可动态调整）
+    pub state_cfg: Arc<StateReadConfig>,
+    // 像素读取线程
+    pixel_reader: Arc<Mutex<PixelReader>>,
+    // 物理键盘组合键监听器（跟随映射启停）
+    pub keyboard: Mutex<KeyboardListener>,
 }
 
 // 【Rust 语法】impl 块：为 AppShared 类型实现方法（构造函数与实例方法都定义在这里）
@@ -43,6 +55,19 @@ impl AppShared {
         // LookRunner 与 AppCore 共享同一个 LookState / 注入器
         let look_state = Arc::clone(&app_core.look); // 【Rust 语法】Arc::clone 增加引用计数，多个 Arc 指向同一底层数据（非深拷贝）
         let injector = Arc::clone(&app_core.injector); // 同样克隆注入器 Arc 引用
+        let states = Arc::clone(&app_core.states); // 克隆状态位引用（像素线程写入，映射线程读取）
+        // 用当前配置初始化读取参数
+        let state_cfg = Arc::new(StateReadConfig::default());
+        {
+            let gs = &app_core.steam.profile.global_settings;
+            state_cfg.enabled.store(gs.state_read_enabled, Ordering::SeqCst);
+            state_cfg
+                .interval_ms
+                .store(gs.state_read_interval_ms.max(10), Ordering::SeqCst);
+            state_cfg.x.store(gs.state_pixel_x, Ordering::SeqCst);
+            state_cfg.y.store(gs.state_pixel_y, Ordering::SeqCst);
+        }
+        let pixel_reader = Arc::new(Mutex::new(PixelReader::new()));
         let core = Arc::new(Mutex::new(app_core)); // 【Rust 语法】Arc::new(Mutex::new(...))：先加互斥锁再放进引用计数指针，成为可跨线程共享对象
 
         let look = Arc::new(Mutex::new(LookRunner::new(injector, look_state))); // 创建视角运行器并共享，注入器与视角状态传给其构造
@@ -57,12 +82,49 @@ impl AppShared {
         });
         let source = Arc::new(Mutex::new(XInputGamepadSource::new(callback))); // 创建手柄读取源并加锁共享，回调接回 core
 
+        // 物理键盘组合键监听器（只初始化，随映射运行状态启停）
+        let keyboard = Mutex::new(KeyboardListener::new(Arc::clone(&states)));
+
         // 【Rust 语法】Self { ... } 结构体字面量构造；字段名与局部变量同名时可缩写（core 即 core: core）
-        Self {
+        let shared = Self {
             core, // 共享的核心对象（AppCore）
             look, // 共享的视角运行器
             source, // 共享的手柄读取源
             running: Arc::new(AtomicBool::new(false)), // 运行标志初始为 false（尚未开始映射）
+            states, // 角色状态位
+            state_cfg, // 读取配置
+            pixel_reader, // 像素读取线程
+            keyboard, // 物理键盘监听器
+        };
+        // 启动像素读取线程（内部按 enabled 开关决定是否真正采集）
+        if let Ok(mut r) = shared.pixel_reader.lock() {
+            r.start(Arc::clone(&shared.states), Arc::clone(&shared.state_cfg));
+        }
+        shared
+    }
+
+    /// 把当前全局设置同步到像素读取配置（设置变更后调用）
+    pub fn sync_state_config(&self) {
+        if let Ok(core) = self.core.lock() {
+            let gs = &core.steam.profile.global_settings;
+            self.state_cfg.enabled.store(gs.state_read_enabled, Ordering::SeqCst);
+            self.state_cfg
+                .interval_ms
+                .store(gs.state_read_interval_ms.max(10), Ordering::SeqCst);
+            self.state_cfg.x.store(gs.state_pixel_x, Ordering::SeqCst);
+            self.state_cfg.y.store(gs.state_pixel_y, Ordering::SeqCst);
+        }
+    }
+
+    /// 把当前键盘规则同步到监听器快照（规则/总开关变更后调用）
+    pub fn sync_keyboard(&self) {
+        // 先取配置快照，再写监听器快照；顺序避免长时间同时持有两把锁
+        let profile = match self.core.lock() {
+            Ok(core) => core.steam.profile.clone(),
+            Err(_) => return,
+        };
+        if let Ok(kb) = self.keyboard.lock() {
+            kb.sync(&profile);
         }
     }
 
@@ -71,6 +133,8 @@ impl AppShared {
         if self.running.load(Ordering::SeqCst) { // 【Rust 语法】AtomicBool::load 读取当前值；Ordering::SeqCst 表示顺序一致内存序
             return; // 已在运行则直接返回，防止重复启动
         }
+        // 启动前先刷新键盘规则快照，保证监听器拿到的配置是最新的
+        self.sync_keyboard();
         if let Ok(mut core) = self.core.lock() { // 尝试锁定 core；成功则取得可变守卫，失败（锁中毒）则跳过
             core.start_mapping(); // 启动 AppCore 的映射逻辑
         }
@@ -79,6 +143,10 @@ impl AppShared {
         }
         if let Ok(mut src) = self.source.lock() { // 锁定手柄读取源
             src.start(); // 启动手柄轮询线程
+        }
+        // 启动物理键盘钩子（内部 worker 线程负责执行映射动作）
+        if let Ok(mut kb) = self.keyboard.lock() {
+            kb.start(Arc::clone(&self.core));
         }
         self.running.store(true, Ordering::SeqCst); // 【Rust 语法】AtomicBool::store 以顺序一致内存序写入 true，标记运行中
     }
@@ -93,6 +161,10 @@ impl AppShared {
         }
         if let Ok(mut src) = self.source.lock() { // 锁定手柄读取源
             src.stop(); // 停止手柄轮询
+        }
+        // 先停键盘钩子，且此时不持有 core 锁（worker 线程可能正等待 core 锁）
+        if let Ok(mut kb) = self.keyboard.lock() {
+            kb.stop();
         }
         if let Ok(mut core) = self.core.lock() { // 锁定 core
             core.stop_mapping(); // 停止映射并释放全部已注入的按键/鼠标状态

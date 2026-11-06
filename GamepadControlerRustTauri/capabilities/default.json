@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "主窗口、悬浮窗、编辑层、使用说明窗口的默认能力：核心 IPC + 窗口拖动/调整大小 + JS 创建独立窗口",
-  "windows": ["main", "overlay", "edit-win", "help-win"],
+  "description": "主窗口、悬浮窗、编辑层、使用说明、键盘映射窗口的默认能力：核心 IPC + 窗口拖动/调整大小 + JS 创建独立窗口",
+  "windows": ["main", "overlay", "edit-win", "help-win", "keymacro-win"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

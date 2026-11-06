@@ -1,6 +1,6 @@
 [package]
 name = "gamepad_controler_tauri"
-version = "0.0.35"
+version = "0.0.41"
 edition = "2021"
 
 # Windows 原生手柄 -> 键鼠映射器（Tauri GUI 版）
@@ -27,7 +27,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_Controls_Dialogs",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    "Win32_System_Console",
     "Win32_Security",
+    "Win32_Graphics_Gdi",
 ] }
 
 # 配置 JSON 读写（前端 IPC 参数也需要 serde）

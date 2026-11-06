@@ -38,6 +38,7 @@
 
       <!-- 右栏：信息 + 设置 + 操作 -->
       <div class="panel right-panel"> <!-- 玻璃卡片面板 -->
+        <div class="right-scroll"> <!-- 可滚动设置区：仅此处滚动，底部按钮行始终可见 -->
         <div id="info-col" style="display:flex;flex-direction:column;gap:2px;"></div> <!-- 当前操作集/层/锁存信息（动态渲染） -->
         <div class="dim">全局设置</div> <!-- 设置区标题 -->
         <div id="settings-col" style="display:flex;flex-direction:column;gap:8px;"></div> <!-- 全局设置调整行（动态渲染） -->
@@ -47,6 +48,25 @@
           <button class="btn" id="btn-wow">浏览…</button> <!-- 打开系统文件选择对话框 -->
         </div>
         <div id="wow-exe-current" class="faint"></div> <!-- 当前目标 exe 路径（动态刷新） -->
+        <div class="dim">角色状态（WoW 插件 SLState）</div> <!-- 角色状态区标题 -->
+        <div class="slider-row"> <!-- 状态读取开关行 -->
+          <div class="slider-label">状态读取</div> <!-- 名称 -->
+          <button class="btn" id="btn-state-toggle" onclick="App.toggleStateRead()">已关闭</button> <!-- 开关按钮（index.js 同步文案） -->
+        </div>
+        <div class="slider-row"> <!-- 状态读取周期行 -->
+          <div class="slider-label">读取周期</div> <!-- 名称 -->
+          <button class="mini" onclick="App.adjustStateInterval(-10)">−</button> <!-- 减少 10ms -->
+          <div class="slider-val" id="state-interval-val">50ms</div> <!-- 当前周期 -->
+          <button class="mini" onclick="App.adjustStateInterval(10)">+</button> <!-- 增加 10ms -->
+        </div>
+        <div class="slider-row"> <!-- 当前状态显示行 -->
+          <div class="slider-label">当前状态</div> <!-- 名称 -->
+          <div class="slider-val" id="state-bits-val">无</div> <!-- 当前为真的状态名列表 -->
+        </div>
+        <div class="slider-row"> <!-- 调试日志开关行 -->
+          <div class="slider-label">调试日志</div> <!-- 名称 -->
+          <button class="btn" id="btn-debug-log" onclick="App.toggleDebugLog()">已关闭</button> <!-- 开启后弹出控制台并输出像素读取日志 -->
+        </div>
         <div class="dim">悬浮窗</div> <!-- 悬浮窗设置区标题 -->
         <div class="slider-row"> <!-- 透明度调整行 -->
           <div class="slider-label">透明度</div> <!-- 名称 -->
@@ -54,7 +74,8 @@
           <div class="slider-val" id="opacity-val"></div> <!-- 当前透明度百分比 -->
           <button class="mini" onclick="App.adjustOpacity(0.05)">+</button> <!-- 提高透明度 -->
         </div>
-        <div class="btn-row"> <!-- 映射控制按钮行 -->
+        </div> <!-- /right-scroll 可滚动设置区结束 -->
+        <div class="btn-row"> <!-- 映射控制按钮行（固定在底部，不随设置区滚动） -->
           <button class="btn-toggle stopped" id="btn-toggle">开始映射</button> <!-- 开始/停止映射（颜色随状态切换） -->
           <button class="btn" id="btn-save">保存配置</button> <!-- 保存配置 -->
           <button class="btn" id="btn-reset">重置默认</button> <!-- 重置默认配置 -->
@@ -62,6 +83,7 @@
         <div class="btn-row"> <!-- 窗口操作按钮行 -->
           <button class="btn" id="btn-overlay">显示悬浮窗</button> <!-- 显示/关闭悬浮窗 -->
           <button class="btn" id="btn-help">使用说明</button> <!-- 打开独立「使用说明」窗口 -->
+          <button class="btn" id="btn-keymacro">键盘映射</button> <!-- 打开独立「物理键盘映射」窗口 -->
           <button class="btn" id="btn-quit">退出</button> <!-- 退出程序 -->
         </div>
       </div>
