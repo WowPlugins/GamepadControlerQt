@@ -77,6 +77,7 @@ const KINDS = [
   ['releasemousetoggle', '释放鼠标锁存'], // 释放鼠标左右键长按锁存
   ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
   ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
+  ['fastlook', '鼠标快速移动'], // 按住时右摇杆高灵敏度
   ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
   ['statemacro', '解锁右键+居中+按键'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
 ];
@@ -101,7 +102,7 @@ const MOUSE_BUTTONS = [
 ];
 
 // NO_TARGET_KINDS：无需选择额外目标的动作类型，选中即生效
-const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook', 'toggleoverlayexpand'];
+const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook', 'fastlook', 'toggleoverlayexpand'];
 
 // ---------------------------------------------------------------------
 // 工具

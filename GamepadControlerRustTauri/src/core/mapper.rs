@@ -48,6 +48,8 @@ const LOOK_SMOOTH_TAU_MAX: f32 = 0.048; // 最大时间常数（smoothing=1 时�
 const LOOK_TICK_MS: u64 = 8; // 节拍周期（125Hz）
 /// 精细移动时右摇杆灵敏度的缩放系数（需求7）
 const FINE_LOOK_SCALE: f32 = 0.25;
+/// 快速移动（精细移动的反向）时右摇杆灵敏度的缩放系数
+const FAST_LOOK_SCALE: f32 = 2.5;
 /// 交互键点击的间隔（毫秒），给游戏识别按下/抬起留出时间
 const INTERACTION_CLICK_GAP_MS: u64 = 15;
 /// 解锁鼠标长按后的等待时间（毫秒）：让游戏先处理完抬起事件，再做移动光标/点击等后续操作
@@ -67,6 +69,8 @@ pub struct LookState {
     pub running: AtomicBool, // 【Rust 语法】AtomicBool：原子布尔，标记 look 线程是否在运行
     /// 精细移动开关（需求7：按住映射了「鼠标精细移动」的手柄键时为 true）
     pub fine_look: AtomicBool,
+    /// 快速移动开关（按住映射了「鼠标快速移动」的手柄键时为 true）
+    pub fast_look: AtomicBool,
 } // 结束 LookState 结构体定义
 
 // 【Rust 语法】自由函数（不在 impl 内，属于模块级函数）：把 f32 以位模式写入 AtomicU32。
@@ -90,6 +94,7 @@ impl Default for LookState {
             acceleration: AtomicU32::new(1.5f32.to_bits()), // 加速度默认 1.5
             running: AtomicBool::new(false), // 初始标记为未运行
             fine_look: AtomicBool::new(false), // 初始未进入精细移动
+            fast_look: AtomicBool::new(false), // 初始未进入快速移动
         } // 结束 Self 结构体字面量
     } // 结束 default 函数
 } // 结束 impl Default for LookState 块
@@ -107,6 +112,11 @@ impl LookState {
     pub fn set_fine_look(&self, on: bool) {
         self.fine_look.store(on, Ordering::Relaxed);
     } // 结束 set_fine_look 函数
+
+    /// 设置/清除快速移动状态
+    pub fn set_fast_look(&self, on: bool) {
+        self.fast_look.store(on, Ordering::Relaxed);
+    } // 结束 set_fast_look 函数
 } // 结束 impl LookState 块
 
 // ---------------------------------------------------------------------
@@ -240,6 +250,7 @@ impl MapperState {
         self.left_stick_pressed_keys.clear(); // 清空左摇杆按键记录
         self.toggled_mouse_buttons.clear(); // 清空锁存记录
         look.set_fine_look(false); // 退出精细移动
+        look.set_fast_look(false); // 退出快速移动
         store_f32(&look.latest_x, 0.0); // 清零右摇杆 X 值
         store_f32(&look.latest_y, 0.0); // 清零右摇杆 Y 值
         self.smoothed_look_x = 0.0; // 复位平滑 X
@@ -305,6 +316,9 @@ impl MapperState {
             let acted = if fired_long { mapping.long_press.as_ref() } else { Some(&mapping.action) };
             if acted.map_or(false, |a| a.r#type == ActionType::FineLook) {
                 look.set_fine_look(false); // 释放时恢复正常灵敏度
+            }
+            if acted.map_or(false, |a| a.r#type == ActionType::FastLook) {
+                look.set_fast_look(false); // 释放时恢复正常灵敏度
             }
             self.release_button_injection(button, injector); // 按已注入状态精确释放
             return; // 提前结束函数
@@ -392,6 +406,7 @@ impl MapperState {
             ActionType::ReleaseMouseToggle => self.handle_release_mouse_toggle(injector, event_tx, wow_exe), // 释放鼠标锁存（需求4）
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
             ActionType::FineLook => look.set_fine_look(true), // 精细移动：按下进入（需求7）
+            ActionType::FastLook => look.set_fast_look(true), // 快速移动：按下进入（精细移动的反向）
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
                 self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);
@@ -1060,7 +1075,16 @@ fn process_look_tick(
     let mut ry = load_f32(&state.latest_y); // 读取右摇杆最新 Y
     // 精细移动（需求7）：灵敏度乘以缩放系数
     let fine = state.fine_look.load(Ordering::Relaxed);
-    let sens = load_f32(&state.sensitivity) * if fine { FINE_LOOK_SCALE } else { 1.0 };
+    let fast = state.fast_look.load(Ordering::Relaxed);
+    // 精细与快速同时按住时以精细为准（保守取小）
+    let look_scale = if fine {
+        FINE_LOOK_SCALE
+    } else if fast {
+        FAST_LOOK_SCALE
+    } else {
+        1.0
+    };
+    let sens = load_f32(&state.sensitivity) * look_scale;
     let smoothing = load_f32(&state.smoothing); // 读取平滑度
     let accel = load_f32(&state.acceleration).clamp(0.5, 3.0); // 读取加速度并钳制在 [0.5, 3.0] 区间
 

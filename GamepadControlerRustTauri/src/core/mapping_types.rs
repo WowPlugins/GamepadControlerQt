@@ -44,6 +44,7 @@ pub enum ActionType {
     ReleaseMouseToggle, // 释放鼠标左右键长按锁存
     SwapMouseToggle, // 交换鼠标左右键长按锁存
     FineLook, // 鼠标精细移动（右摇杆低灵敏度，按住生效）
+    FastLook, // 鼠标快速移动（右摇杆高灵敏度，按住生效）
     ToggleOverlayExpand, // 切换悬浮窗展开/收起状态
     StateMacro, // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键（受状态条件约束）
 } // 结束 ActionType 枚举定义
@@ -227,6 +228,14 @@ impl MappedAction {
             layer_name: None,
         }
     }
+    pub fn fast_look() -> Self { // 构造"鼠标快速移动"动作
+        Self {
+            r#type: ActionType::FastLook,
+            key_code: 0,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
     /// 构造状态宏动作：code 为最终要发送的主键（子命令作为组合键修饰）
     pub fn state_macro(code: i32) -> Self {
         Self {
@@ -333,6 +342,7 @@ impl KeyMapping {
             ActionType::ReleaseMouseToggle => parts.push("释放鼠标锁存".to_string()), // 释放锁存描述
             ActionType::SwapMouseToggle => parts.push("交换鼠标左右键锁存".to_string()), // 交换锁存描述
             ActionType::FineLook => parts.push("鼠标精细移动".to_string()), // 精细移动描述
+            ActionType::FastLook => parts.push("鼠标快速移动".to_string()), // 快速移动描述
             ActionType::ToggleOverlayExpand => parts.push("切换悬浮窗展开".to_string()), // 切换悬浮窗展开/收起描述
             ActionType::StateMacro => parts.push(format!("解锁右键+居中+按键 {}", key_code_to_name(self.action.key_code))), // 解锁+居中+发送组合键
         } // 结束 match 表达式

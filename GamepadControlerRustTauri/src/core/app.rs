@@ -142,8 +142,9 @@ impl AppCore {
                             self.injector.as_ref(),
                             &self.event_tx,
                         );
-                        // 层切换时退出精细移动，避免灵敏度残留
+                        // 层切换时退出精细/快速移动，避免灵敏度残留
                         self.look.set_fine_look(false);
+                        self.look.set_fast_look(false);
                     }
                     // 开关映射的分发：向外发出 ToggleMappingRequested 事件。
                     ButtonDispatch::ToggleMapping => {
@@ -229,6 +230,7 @@ impl AppCore {
                     self.mapper
                         .release_button_injection(trigger, self.injector.as_ref());
                     self.look.set_fine_look(false);
+                    self.look.set_fast_look(false);
                 }
             }
             return;
