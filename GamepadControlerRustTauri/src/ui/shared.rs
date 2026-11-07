@@ -66,6 +66,9 @@ impl AppShared {
                 .store(gs.state_read_interval_ms.max(10), Ordering::SeqCst);
             state_cfg.x.store(gs.state_pixel_x, Ordering::SeqCst);
             state_cfg.y.store(gs.state_pixel_y, Ordering::SeqCst);
+            if let Ok(mut e) = state_cfg.exe.lock() {
+                *e = gs.wow_exe.clone(); // 目标游戏 exe（像素读取按它定位游戏窗口）
+            }
         }
         let pixel_reader = Arc::new(Mutex::new(PixelReader::new()));
         let core = Arc::new(Mutex::new(app_core)); // 【Rust 语法】Arc::new(Mutex::new(...))：先加互斥锁再放进引用计数指针，成为可跨线程共享对象
@@ -113,6 +116,9 @@ impl AppShared {
                 .store(gs.state_read_interval_ms.max(10), Ordering::SeqCst);
             self.state_cfg.x.store(gs.state_pixel_x, Ordering::SeqCst);
             self.state_cfg.y.store(gs.state_pixel_y, Ordering::SeqCst);
+            if let Ok(mut e) = self.state_cfg.exe.lock() {
+                *e = gs.wow_exe.clone(); // 同步目标游戏 exe（像素读取据此定位游戏窗口）
+            }
         }
     }
 

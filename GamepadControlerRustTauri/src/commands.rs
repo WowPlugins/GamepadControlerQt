@@ -1215,16 +1215,22 @@ fn apply_wow_exe(core: &mut crate::core::AppCore, path: &str) {
 #[tauri::command]
 pub fn pick_wow_exe(state: State<'_, AppState>) -> Option<String> {
     let path = pick_exe_dialog()?; // 弹出对话框；取消则返回 None
-    let mut core = state.shared.core.lock().unwrap();
-    apply_wow_exe(&mut core, &path);
+    {
+        let mut core = state.shared.core.lock().unwrap();
+        apply_wow_exe(&mut core, &path);
+    }
+    state.shared.sync_state_config(); // 同步给像素读取线程（按新 exe 定位游戏窗口）
     Some(path)
 } // 函数结束
 
 // 从历史记录中选择 WoW exe
 #[tauri::command]
 pub fn set_wow_exe(state: State<'_, AppState>, path: String) {
-    let mut core = state.shared.core.lock().unwrap();
-    apply_wow_exe(&mut core, &path);
+    {
+        let mut core = state.shared.core.lock().unwrap();
+        apply_wow_exe(&mut core, &path);
+    }
+    state.shared.sync_state_config(); // 同步给像素读取线程（按新 exe 定位游戏窗口）
 } // 函数结束
 
 // 【Rust 语法】属性宏 #[tauri::command]：注册为 Tauri IPC 命令

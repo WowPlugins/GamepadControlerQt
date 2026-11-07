@@ -84,6 +84,9 @@ fn main() { // 程序主入口
         if let Ok(mut core) = shared.core.lock() { // 加锁成功后取得核心的可变访问
             core.load_profile(profile); // 把加载的配置载入核心
         } // if-let 结束（此处锁自动释放）
+        // 把配置里的状态读取开关/周期/像素锚点同步给像素读取线程
+        // （AppShared 构造时核心还是默认配置，不在这里同步会导致重启后读取不生效）
+        shared.sync_state_config();
     } // 作用域块结束
 
     // ---- 2. 启动 Tauri ----

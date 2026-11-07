@@ -20,7 +20,8 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 }; // 进程查询 API
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowThreadProcessId, IsWindow, PostMessageW, WM_KEYDOWN, WM_KEYUP,
+    EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+    PostMessageW, WM_KEYDOWN, WM_KEYUP,
 }; // 窗口枚举 / 消息投递
 
 /// 规范化路径：统一小写、反斜杠，便于与进程完整路径比较
@@ -34,6 +35,14 @@ pub fn is_window_valid(hwnd: isize) -> bool {
         return false; // 空句柄直接判无效
     }
     unsafe { IsWindow(Some(HWND(hwnd as *mut core::ffi::c_void))).as_bool() } // 调用系统 API 检查窗口是否存在
+}
+
+/// 判断目标窗口当前是否处于前台（前台时 WASD 必须走 SendInput，游戏才认）
+pub fn is_foreground(hwnd: isize) -> bool {
+    if hwnd == 0 {
+        return false; // 空句柄按非前台处理
+    }
+    unsafe { GetForegroundWindow() == HWND(hwnd as *mut core::ffi::c_void) }
 }
 
 // ---------------------------------------------------------------------
@@ -71,6 +80,10 @@ fn process_image_path(pid: u32) -> Option<String> {
 /// EnumWindows 回调：命中目标进程则记录句柄并停止枚举
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let ctx = &mut *(lparam.0 as *mut FindContext); // 还原上下文指针
+    // 只考虑可见的顶层窗口（游戏进程常有隐藏的辅助窗口，客户区坐标不可用）
+    if !IsWindowVisible(hwnd).as_bool() {
+        return TRUE;
+    }
     let mut pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, Some(&mut pid)); // 取窗口所属进程 id
     if pid != 0 {

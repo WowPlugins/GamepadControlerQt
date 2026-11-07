@@ -866,8 +866,12 @@ impl MapperState {
         } // 结束拦截分支
 
         // 右键锁存时把 WASD 直发目标窗口，否则走常规 SendInput
+        // 注意：目标窗口在前台时不能用 PostMessage——WoW 前台时读的是原始输入，
+        // PostMessage 投递的 WM_KEYDOWN 不会被识别（表现就是左摇杆完全没反应），
+        // 只有游戏不在前台时才用直发通道。
         let hwnd = if self.is_mouse_locked(MouseButton::Right) {
             self.resolve_wow_hwnd(wow_exe)
+                .filter(|h| !wow_sender::is_foreground(*h))
         } else {
             None
         };
@@ -883,6 +887,14 @@ impl MapperState {
             for kc in old {
                 send_stick_key(kc, false, old_hwnd, injector); // 旧通道松开
             }
+        }
+        // 仅通道切换时打一条日志，避免 125Hz 刷屏
+        if self.stick_keys_via_post != via_post {
+            crate::dbg_log!(
+                "左摇杆 WASD 通道切换 → {}（目标窗口 hwnd={}）",
+                if via_post { "PostMessage 直发" } else { "SendInput" },
+                hwnd.unwrap_or(0)
+            );
         }
         self.stick_keys_via_post = via_post;
 
