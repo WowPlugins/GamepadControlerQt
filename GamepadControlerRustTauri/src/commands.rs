@@ -248,6 +248,7 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
         ActionType::SwapMouseToggle => "交换鼠标左右键锁存".to_string(), // 交换左右键锁存
         ActionType::FineLook => "鼠标精细移动".to_string(), // 右摇杆精细移动
         ActionType::FastLook => "鼠标快速移动".to_string(), // 右摇杆快速移动
+        ActionType::TurnAround => format!("快速转身 {}°", a.key_code.abs() * 90 / 400), // 快速转身角度
         ActionType::ToggleOverlayExpand => "切换悬浮窗展开/收起".to_string(), // 悬浮窗展开状态切换
         ActionType::StateMacro => format!("解锁右键+居中+按键: {}", key_code_to_name(a.key_code)), // 解锁+居中+发送组合键
         _ => "（未知）".to_string(), // 【Rust 语法】通配符 _ 分支：兜底匹配所有未列出的枚举值
@@ -269,6 +270,7 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::SwapMouseToggle => "swapmousetoggle", // 交换左右键锁存
         ActionType::FineLook => "finelook", // 精细移动
         ActionType::FastLook => "fastlook", // 快速移动
+        ActionType::TurnAround => "turnaround", // 快速转身
         ActionType::ToggleOverlayExpand => "toggleoverlayexpand", // 切换悬浮窗展开/收起
         ActionType::StateMacro => "statemacro", // 状态宏
         _ => "keyboard", // 未知类型兜底为 keyboard
@@ -303,6 +305,8 @@ fn build_action(
         "swapmousetoggle" => Some(MappedAction::swap_mouse_toggle()), // 交换左右键锁存（需求5）
         "finelook" => Some(MappedAction::fine_look()), // 精细移动（需求7）
         "fastlook" => Some(MappedAction::fast_look()), // 快速移动（精细移动的反向）
+        // 快速转身：keyCode 承载有符号像素（正=右，负=左），缺省 800（约 180°）
+        "turnaround" => Some(MappedAction::turn_around(key_code.filter(|v| *v != 0).unwrap_or(800))),
         "toggleoverlayexpand" => Some(MappedAction::toggle_overlay_expand()), // 切换悬浮窗展开/收起
         "statemacro" => Some(MappedAction::state_macro(key_code.unwrap_or(0))), // 状态宏：未选键时先建空动作，选键后再更新
         _ => None, // 未知类型不生成动作

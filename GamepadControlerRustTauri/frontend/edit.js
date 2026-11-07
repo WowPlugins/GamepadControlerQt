@@ -78,6 +78,7 @@ const KINDS = [
   ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
   ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
   ['fastlook', '鼠标快速移动'], // 按住时右摇杆高灵敏度
+  ['turnaround', '快速转身'], // 按下即按所选方向/幅度转动视角一次
   ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
   ['statemacro', '解锁右键+居中+按键'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
 ];
@@ -362,6 +363,19 @@ function targetHTML(info, kind, act, isLong) {
         'onclick="App.set' + preset + 'Layer(' + q(t.name) + ')">' + esc(t.display) + '</div>' // 点击设置切层映射
       ).join('') + '</div>';
   }
+  if (kind === 'turnaround') { // 快速转身 → 选择方向与幅度（按下即执行一次）
+    const px = (a.key_code && a.key_code !== 0) ? a.key_code : 800; // 缺省 800px（约 180°）
+    const right = px > 0; // 正数向右，负数向左
+    const mag = Math.abs(px); // 当前幅度（像素）
+    const DEGS = [[400, '90°'], [800, '180°'], [1200, '270°'], [1600, '360°']]; // 幅度档位
+    return '<div class="dim">方向（点击执行一次，无需按住）</div><div class="chips-row">' +
+      '<div class="chip' + (right ? ' active' : '') + '" onclick="App.set' + preset + 'Turn(' + mag + ')">向右</div>' +
+      '<div class="chip' + (!right ? ' active' : '') + '" onclick="App.set' + preset + 'Turn(' + (-mag) + ')">向左</div>' +
+      '</div><div class="dim">幅度（约）</div><div class="chips-row">' +
+      DEGS.map(([v, label]) => // 遍历幅度档位生成 chip
+        '<div class="chip' + (v === mag ? ' active' : '') + '" onclick="App.set' + preset + 'Turn(' + (right ? v : -v) + ')">' + label + '</div>'
+      ).join('') + '</div>';
+  }
   return '<div class="faint">该动作无需额外目标，点击上方类型即生效</div>'; // 无需目标的动作提示
 }
 
@@ -398,6 +412,14 @@ const App = {
   },
   setMacroKey(code) { // 设置状态宏要发送的主键
     invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'statemacro', keyCode: code, mouseButton: null, layerName: null }); // 写入状态宏映射
+  },
+  setTurn(px) { // 设置快速转身：px 正=向右，负=向左，绝对值=像素幅度
+    invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'turnaround', keyCode: px, mouseButton: null, layerName: null });
+    prevEdit = null; // 强制重新渲染
+  },
+  setLongTurn(px) { // 设置长按快速转身
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'turnaround', keyCode: px, mouseButton: null, layerName: null });
+    prevEdit = null; // 强制重新渲染
   },
   cycleState(stateId) { // 切换某状态的条件：未选 -> 为真 -> 为假 -> 未选
     const idx = currentConds.findIndex((c) => c.stateId === stateId); // 查找该状态是否已配置

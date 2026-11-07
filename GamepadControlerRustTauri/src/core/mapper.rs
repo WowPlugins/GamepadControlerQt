@@ -407,6 +407,16 @@ impl MapperState {
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
             ActionType::FineLook => look.set_fine_look(true), // 精细移动：按下进入（需求7）
             ActionType::FastLook => look.set_fast_look(true), // 快速移动：按下进入（精细移动的反向）
+            ActionType::TurnAround => { // 快速转身：按下即执行一次（不需要按住）
+                // key_code 存有符号像素：正=右，负=左；按每帧分 8 步注入，避免单次位移过大被游戏裁剪
+                if action.key_code != 0 {
+                    let total = action.key_code as f32;
+                    let step = total / 8.0;
+                    for _ in 0..8 {
+                        injector.send_mouse_move(step, 0.0); // 相对鼠标移动
+                    }
+                }
+            }
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
                 self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);

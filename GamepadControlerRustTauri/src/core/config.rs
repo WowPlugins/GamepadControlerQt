@@ -48,6 +48,7 @@ const K_TYPE_RELEASE_MOUSE_TOGGLE: &str = "releaseMouseToggle";
 const K_TYPE_SWAP_MOUSE_TOGGLE: &str = "swapMouseToggle";
 const K_TYPE_FINE_LOOK: &str = "fineLook";
 const K_TYPE_FAST_LOOK: &str = "fastLook";
+const K_TYPE_TURN_AROUND: &str = "turnAround";
 const K_TYPE_TOGGLE_OVERLAY_EXPAND: &str = "toggleOverlayExpand";
 // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键
 const K_TYPE_STATE_MACRO: &str = "stateMacro";
@@ -422,6 +423,8 @@ fn action_to_json(action: &MappedAction) -> Value {
         // 鼠标精细移动：只输出 type。
         ActionType::FineLook => json!({ "type": K_TYPE_FINE_LOOK }),
         ActionType::FastLook => json!({ "type": K_TYPE_FAST_LOOK }),
+        // 快速转身：把有符号像素值（正=右，负=左）序列化为 pixels。
+        ActionType::TurnAround => json!({ "type": K_TYPE_TURN_AROUND, "pixels": action.key_code }),
         ActionType::ToggleOverlayExpand => json!({ "type": K_TYPE_TOGGLE_OVERLAY_EXPAND }),
         ActionType::StateMacro => json!({ "type": K_TYPE_STATE_MACRO, "keyCode": action.key_code }),
     }
@@ -465,6 +468,11 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
         K_TYPE_SWAP_MOUSE_TOGGLE => Some(MappedAction::swap_mouse_toggle()),
         K_TYPE_FINE_LOOK => Some(MappedAction::fine_look()),
         K_TYPE_FAST_LOOK => Some(MappedAction::fast_look()),
+        K_TYPE_TURN_AROUND => {
+            // 缺省 800（约 180°），正数向右、负数向左。
+            let px = obj.get("pixels").and_then(|v| v.as_i64()).unwrap_or(800) as i32;
+            Some(MappedAction::turn_around(if px == 0 { 800 } else { px }))
+        }
         K_TYPE_TOGGLE_OVERLAY_EXPAND => Some(MappedAction::toggle_overlay_expand()),
         K_TYPE_STATE_MACRO => Some(MappedAction::state_macro(
             obj.get("keyCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32,

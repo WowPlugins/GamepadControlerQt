@@ -45,6 +45,7 @@ pub enum ActionType {
     SwapMouseToggle, // 交换鼠标左右键长按锁存
     FineLook, // 鼠标精细移动（右摇杆低灵敏度，按住生效）
     FastLook, // 鼠标快速移动（右摇杆高灵敏度，按住生效）
+    TurnAround, // 快速转身（按下即执行一次相对鼠标移动，key_code 存有符号像素：正=右，负=左）
     ToggleOverlayExpand, // 切换悬浮窗展开/收起状态
     StateMacro, // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键（受状态条件约束）
 } // 结束 ActionType 枚举定义
@@ -236,6 +237,14 @@ impl MappedAction {
             layer_name: None,
         }
     }
+    pub fn turn_around(pixels: i32) -> Self { // 构造"快速转身"动作（pixels 正=右，负=左）
+        Self {
+            r#type: ActionType::TurnAround,
+            key_code: pixels,
+            mouse_button: MouseButton::Left,
+            layer_name: None,
+        }
+    }
     /// 构造状态宏动作：code 为最终要发送的主键（子命令作为组合键修饰）
     pub fn state_macro(code: i32) -> Self {
         Self {
@@ -343,6 +352,12 @@ impl KeyMapping {
             ActionType::SwapMouseToggle => parts.push("交换鼠标左右键锁存".to_string()), // 交换锁存描述
             ActionType::FineLook => parts.push("鼠标精细移动".to_string()), // 精细移动描述
             ActionType::FastLook => parts.push("鼠标快速移动".to_string()), // 快速移动描述
+            ActionType::TurnAround => { // 快速转身：按像素换算成角度展示
+                let px = self.action.key_code.abs();
+                let deg = px * 90 / 400; // 400px 约 90°
+                let dir = if self.action.key_code < 0 { "向左" } else { "向右" };
+                parts.push(format!("快速转身 {}°（{}）", deg, dir));
+            }
             ActionType::ToggleOverlayExpand => parts.push("切换悬浮窗展开".to_string()), // 切换悬浮窗展开/收起描述
             ActionType::StateMacro => parts.push(format!("解锁右键+居中+按键 {}", key_code_to_name(self.action.key_code))), // 解锁+居中+发送组合键
         } // 结束 match 表达式
