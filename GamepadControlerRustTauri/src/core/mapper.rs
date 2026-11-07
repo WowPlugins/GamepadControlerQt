@@ -291,6 +291,7 @@ impl MapperState {
         injector: &InputInjector, // 注入器引用（只读）
         event_tx: &Sender<UiEvent>, // 事件通道发送端引用（只读）
         look: &LookState, // 视角状态引用（精细移动开关）
+        wow_exe: &str, // 目标游戏 exe（状态宏居中按游戏客户区计算）
     ) { // 结束参数列表，函数体开始
         if !is_pressed { // 松开分支
             let fired_long = self.long_press_buttons.remove(&button); // 该按钮是否已触发过长按
@@ -298,7 +299,7 @@ impl MapperState {
             // 配置了长按但未超阈值就松开：此时才执行短按动作（按下记录 + 立即释放 = 一次点按），
             // 这样长按时不会先误触发短按。切层动作在按下时已执行，跳过以免重复切层。
             if had_pending && !fired_long && mapping.action.r#type != ActionType::SwitchLayer {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look);
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe);
             }
             // 精细移动：按「本次实际执行的动作」复位——长按触发时用长按动作类型，否则用主动作类型
             let acted = if fired_long { mapping.long_press.as_ref() } else { Some(&mapping.action) };
@@ -313,7 +314,7 @@ impl MapperState {
             // 配置了长按动作：按下先不执行短按，等松开（未超阈值）或 Tick 判定超阈值后再决定，
             // 避免长按时先触发一次短按（点击）。
             if mapping.action.r#type == ActionType::SwitchLayer {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look); // 切层必须按下立即生效
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
             }
             let threshold = mapping.long_press_ms.clamp(100, 5000); // 阈值限幅 100~5000ms
             self.pending_long_press.insert(
@@ -330,7 +331,7 @@ impl MapperState {
         }
 
         // 未配置长按：按下立即执行短按动作
-        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look);
+        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe);
     } // 结束 handle_button 函数
 
     /// 长按检查（由轮询线程每个 Tick 调用）：满足阈值的按钮切换为长按动作
@@ -339,6 +340,7 @@ impl MapperState {
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         look: &LookState,
+        wow_exe: &str, // 目标游戏 exe（长按动作为状态宏时居中用）
     ) {
         if self.pending_long_press.is_empty() { // 无待判定项时直接返回
             return;
@@ -356,7 +358,7 @@ impl MapperState {
                 self.release_button_injection(button, injector); // 先释放按下时已注入的状态（配置长按后短按未注入，通常无内容）
                 self.long_press_buttons.insert(button); // 标记为长按已触发
                 let layer = p.layer_id.clone(); // 先克隆层 id，避免与 &mut self 借用冲突
-                self.execute_press(button, &p.action, &p.subs, &layer, injector, event_tx, look); // 执行长按动作
+                self.execute_press(button, &p.action, &p.subs, &layer, injector, event_tx, look, wow_exe); // 执行长按动作
             } // 结束 if let 分支
         } // 结束 for 循环
     } // 结束 check_long_press 函数
@@ -371,6 +373,7 @@ impl MapperState {
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         look: &LookState,
+        wow_exe: &str, // 目标游戏 exe（状态宏居中按游戏客户区计算）
     ) {
         // 【Rust 语法】match 模式匹配：按动作类型分发到对应处理逻辑。
         match action.r#type {
@@ -386,12 +389,12 @@ impl MapperState {
             ActionType::WheelUp => self.handle_wheel(button, 1, subs, injector), // 滚轮上滚（支持子命令组合键，如 Alt+滚轮）
             ActionType::WheelDown => self.handle_wheel(button, -1, subs, injector), // 滚轮下滚（支持子命令组合键）
             ActionType::InteractionKey => self.handle_interaction_key(injector), // 交互键（需求1）
-            ActionType::ReleaseMouseToggle => self.handle_release_mouse_toggle(injector, event_tx), // 释放鼠标锁存（需求4）
+            ActionType::ReleaseMouseToggle => self.handle_release_mouse_toggle(injector, event_tx, wow_exe), // 释放鼠标锁存（需求4）
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
             ActionType::FineLook => look.set_fine_look(true), // 精细移动：按下进入（需求7）
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
-                self.handle_state_macro(button, action.key_code, subs, injector, event_tx);
+                self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);
             }
             // 【Rust 语法】模式 `|`（或）匹配：多个变体共享同一分支代码。
             ActionType::SwitchLayer // 切换层动作
@@ -532,7 +535,7 @@ impl MapperState {
     // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
     // -----------------------------------------------------------------
     /// 先解除所有右键锁存（含按钮锁存与 WASD 拦截自动锁定），把光标移到
-    /// 屏幕中央，再按住目标组合键；松开时由 release_button_injection 精确释放。
+    /// 游戏画面中央，再按住目标组合键；松开时由 release_button_injection 精确释放。
     fn handle_state_macro(
         &mut self,
         button: TriggerId,
@@ -540,6 +543,7 @@ impl MapperState {
         subs: &[i32],
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
+        wow_exe: &str, // 目标游戏 exe（按游戏客户区计算居中坐标）
     ) {
         // 1) 解除所有右键锁存
         let mut released = false; // 是否实际解锁过（决定是否需要等待）
@@ -572,9 +576,18 @@ impl MapperState {
             thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 等游戏处理抬起事件
         }
 
-        // 2) 光标移到屏幕中央
-        let (w, h) = injector.screen_size();
-        injector.set_cursor_pos(w / 2, h / 2);
+        // 2) 光标移到游戏客户区中央
+        // 按游戏客户区计算（而非主屏中心），游戏非全屏/多显示器时才不会落到画面外；
+        // 且必须用 SendInput 绝对移动：SetCursorPos 不产生输入事件，游戏感知不到光标位移。
+        let (cx, cy) = self.target_center(wow_exe, injector);
+        injector.move_cursor_absolute(cx, cy); // 必须用 SendInput 绝对移动，游戏才感知得到光标位置
+        crate::dbg_log!(
+            "状态宏 按键={} 解锁右键={} 光标移到=({},{})",
+            key_code,
+            released,
+            cx,
+            cy
+        );
         thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待光标就位
 
         // 3) 按住目标组合键（主键 + 子命令）
@@ -624,7 +637,12 @@ impl MapperState {
     // -----------------------------------------------------------------
     // 需求4：释放鼠标按键长按锁存
     // -----------------------------------------------------------------
-    fn handle_release_mouse_toggle(&mut self, injector: &InputInjector, event_tx: &Sender<UiEvent>) {
+    fn handle_release_mouse_toggle(
+        &mut self,
+        injector: &InputInjector,
+        event_tx: &Sender<UiEvent>,
+        wow_exe: &str, // 目标游戏 exe（居中按游戏客户区计算）
+    ) {
         // 释放所有由手柄按钮建立的锁存
         let mut released = false; // 是否实际释放过鼠标锁存（决定是否需要等待）
         let toggled: Vec<(TriggerId, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
@@ -645,10 +663,20 @@ impl MapperState {
         if released {
             thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 解锁后等待，让游戏先处理抬起事件
         }
-        // 需求4：释放锁存后把鼠标移动到屏幕正中央（含 WASD 拦截还原光标之后再次居中）
-        let (w, h) = injector.screen_size(); // 主屏尺寸
-        injector.set_cursor_pos(w / 2, h / 2); // 光标移到屏幕中央
+        // 需求4：释放锁存后把鼠标移到游戏画面正中央（含 WASD 拦截还原光标之后再次居中）
+        // 按游戏客户区计算：游戏非全屏时主屏中心会落到画面外，光标等于没进游戏。
+        let (cx, cy) = self.target_center(wow_exe, injector);
+        injector.move_cursor_absolute(cx, cy); // 光标移到游戏画面中央（SendInput 绝对移动，游戏可感知）
     } // 结束 handle_release_mouse_toggle 函数
+
+    /// 目标游戏客户区中心（找不到游戏窗口时回退主屏中心）
+    fn target_center(&mut self, wow_exe: &str, injector: &InputInjector) -> (i32, i32) {
+        if let Some((cx, cy)) = self.resolve_wow_hwnd(wow_exe).and_then(wow_sender::client_center) {
+            return (cx, cy);
+        }
+        let (w, h) = injector.screen_size();
+        (w / 2, h / 2)
+    }
 
     // -----------------------------------------------------------------
     // 需求5：交换鼠标左右键长按锁存

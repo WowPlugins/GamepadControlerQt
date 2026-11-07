@@ -24,7 +24,8 @@ use std::sync::Mutex;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CYSCREEN,
+    GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 // windows crate 0.62 未导出这些 XButton / 滚轮常量，自行定义（与 Windows SDK 一致）
@@ -472,6 +473,38 @@ impl InputInjector {
     pub fn set_cursor_pos(&self, x: i32, y: i32) {
         unsafe {
             let _ = SetCursorPos(x, y);
+        }
+    }
+
+    /// 绝对移动鼠标（用 SendInput 产生真实鼠标移动事件）
+    ///
+    /// 与 set_cursor_pos 的区别：SetCursorPos 只挪动光标位置，不产生任何输入事件，
+    /// 游戏（如 WoW）靠鼠标消息/原始输入更新自己的光标位置，感知不到位移，
+    /// 表现就是「光标移到了中心但游戏里没反应」。SendInput 绝对移动会被游戏正常接收。
+    pub fn move_cursor_absolute(&self, x: i32, y: i32) {
+        unsafe {
+            // 归一化到虚拟桌面范围（0..65535），多显示器/缩放时也能落到正确物理坐标
+            let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(2);
+            let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(2);
+            let nx = ((x - vx) as i64 * 65535 / (vw as i64 - 1)) as i32;
+            let ny = ((y - vy) as i64 * 65535 / (vh as i64 - 1)) as i32;
+            let input = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: nx,
+                        dy: ny,
+                        mouseData: 0,
+                        // 绝对 + 虚拟桌面：dx/dy 视为整个虚拟桌面的归一化坐标
+                        dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            SendInput(&[input], std::mem::size_of::<INPUT>() as i32); // 注入绝对移动事件
         }
     }
 

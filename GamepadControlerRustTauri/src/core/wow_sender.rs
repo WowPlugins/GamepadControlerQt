@@ -15,13 +15,14 @@
 // 【Rust 语法】use 导入：复用注入器里已有的 Android KeyCode -> 物理扫描码映射
 use crate::core::injector::{android_key_code_to_windows_scan_code, is_extended_key};
 use windows::core::{BOOL, PWSTR}; // 布尔类型 / 可写宽字符串指针（QueryFullProcessImageNameW 出参）
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM, FALSE, TRUE}; // 窗口句柄 / 关闭句柄 / 回调参数
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM, FALSE, TRUE}; // 窗口句柄 / 关闭句柄 / 回调参数
+use windows::Win32::Graphics::Gdi::ClientToScreen; // 客户区坐标 -> 屏幕坐标
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 }; // 进程查询 API
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
-    PostMessageW, WM_KEYDOWN, WM_KEYUP,
+    EnumWindows, GetClientRect, GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
+    IsWindowVisible, PostMessageW, WM_KEYDOWN, WM_KEYUP,
 }; // 窗口枚举 / 消息投递
 
 /// 规范化路径：统一小写、反斜杠，便于与进程完整路径比较
@@ -43,6 +44,30 @@ pub fn is_foreground(hwnd: isize) -> bool {
         return false; // 空句柄按非前台处理
     }
     unsafe { GetForegroundWindow() == HWND(hwnd as *mut core::ffi::c_void) }
+}
+
+/// 取窗口客户区中心的屏幕坐标（窗口失效时返回 None）
+/// 游戏窗口不一定是全屏：按主屏中心移动光标会落到游戏画面外，
+/// 「居中」必须基于游戏客户区计算。
+pub fn client_center(hwnd: isize) -> Option<(i32, i32)> {
+    if hwnd == 0 {
+        return None; // 空句柄
+    }
+    let h = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe {
+        let mut rc = RECT::default();
+        if GetClientRect(h, &mut rc).is_err() {
+            return None; // 窗口已销毁
+        }
+        let mut pt = POINT {
+            x: rc.right / 2, // 客户区中心（相对客户区原点）
+            y: rc.bottom / 2,
+        };
+        if !ClientToScreen(h, &mut pt).as_bool() {
+            return None; // 坐标转换失败
+        }
+        Some((pt.x, pt.y))
+    }
 }
 
 // ---------------------------------------------------------------------

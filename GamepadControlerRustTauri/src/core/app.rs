@@ -119,6 +119,7 @@ impl AppCore {
                         let allowed = !is_pressed
                             || mapping.state_allows(|id| states.get(id));
                         if allowed {
+                            let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（状态宏居中用）
                             // 调用 mapper 处理按钮注入（传入按钮、状态、映射、来源层、注入器、事件发送端与视角状态）。
                             self.mapper.handle_button(
                                 TriggerId::Pad(button),
@@ -130,6 +131,7 @@ impl AppCore {
                                 self.injector.as_ref(),
                                 &self.event_tx,
                                 self.look.as_ref(),
+                                &wow_exe,
                             );
                         }
                     }
@@ -176,10 +178,12 @@ impl AppCore {
             }
             // 轮询心跳：检查待判定的长按是否达到阈值（需求2）
             SourceEvent::Tick => {
+                let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（长按动作为状态宏时居中用）
                 self.mapper.check_long_press(
                     self.injector.as_ref(),
                     &self.event_tx,
                     self.look.as_ref(),
+                    &wow_exe,
                 );
             }
         }
@@ -206,6 +210,7 @@ impl AppCore {
             m.long_press_subs.clear();
         }
 
+        let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（状态宏居中用）
         if !is_pressed {
             match mapping {
                 // 常规松开：按原映射精确释放（与手柄一致）
@@ -217,6 +222,7 @@ impl AppCore {
                     self.injector.as_ref(),
                     &self.event_tx,
                     self.look.as_ref(),
+                    &wow_exe,
                 ),
                 None => {
                     // 规则在按住期间被删除 / 禁用：按"已注入状态"兜底释放，避免卡键
@@ -248,6 +254,7 @@ impl AppCore {
             self.injector.as_ref(),
             &self.event_tx,
             self.look.as_ref(),
+            &wow_exe,
         );
     }
 
