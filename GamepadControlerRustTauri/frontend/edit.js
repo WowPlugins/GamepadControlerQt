@@ -138,6 +138,17 @@ let renameLayerValue = ''; // 当前重命名的名称值
 let currentConds = []; // 当前按键的状态条件 [{stateId, expected}]
 let currentLogic = 'or'; // 状态条件组合方式（or / and）
 
+// 同步当前选中按键的映射类型。
+// 首次打开编辑页时 editKind 只是初始值「未设置」，必须显式拉一次，
+// 否则 A/B/X/Y 已配置的映射不显示，要切到别的按键再切回来才出现。
+function syncSelectedKind() {
+  return invoke('get_mapping', { layerId: editLayerId, button: selectedButton }).then((map) => {
+    editKind = map.has_mapping ? map.kind : 'none'; // 有映射则按其类型显示，否则显示未设置
+    editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
+    prevEdit = null; // 强制下一轮重新渲染
+  });
+}
+
 // 主窗口复用本窗口并切换目标层时，通过事件推送新的层 id
 listen('edit-layer', (e) => { // 注册 edit-layer 事件监听
   const id = (e.payload && e.payload.layerId) || 'Common'; // 读取事件携带的层 id，缺省为公共层
@@ -147,12 +158,20 @@ listen('edit-layer', (e) => { // 注册 edit-layer 事件监听
   editLongKind = null; // 重置长按动作类型为未配置
   prevEdit = null; // 清空对比串，强制下一轮重新渲染
   prevSelectKey = null; // 清空下拉框指纹，切换层后强制重建选项
-  // 读取新层 A 键的现有映射类型
-  invoke('get_mapping', { layerId: id, button: 'A' }).then((map) => { // 查询 A 键当前映射
-    if (map.has_mapping) editKind = map.kind; else editKind = 'none'; // 有映射则按原类型显示，否则为未设置
-    editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
-    prevEdit = null; // 再次强制下一轮重新渲染
-  });
+  syncSelectedKind(); // 读取新层 A 键的现有映射类型
+});
+
+// 复用窗口时若仅 URL hash 变化（未收到 edit-layer 事件），也要同步切换层
+window.addEventListener('hashchange', () => {
+  const id = decodeURIComponent(location.hash.replace(/^#/, '')) || 'Common';
+  if (id === editLayerId) return; // 层未变化则忽略
+  editLayerId = id; // 更新当前编辑的层 id
+  selectedButton = 'A'; // 重置选中按键
+  editKind = 'none'; // 重置动作类型
+  editLongKind = null; // 重置长按动作类型
+  prevEdit = null; // 强制重新渲染
+  prevSelectKey = null; // 强制重建下拉框选项
+  syncSelectedKind(); // 同步 A 键的映射类型
 });
 
 // ---------------------------------------------------------------------
@@ -505,6 +524,9 @@ document.addEventListener('pointerdown', (e) => { // 监听指针按下（事件
 //   - 带 ?prewarm=1（应用启动时预热创建）：保持隐藏，用户点击后由 main.js 调用 show() 显示
 //   - 不带 prewarm（用户点击后才新建）：首帧渲染完成后自动显示，避免打开瞬间白屏闪动
 // ---------------------------------------------------------------------
+// 启动即同步一次映射类型（预热窗口与新建窗口都适用），避免首帧显示"未设置"
+syncSelectedKind();
+
 if (!new URLSearchParams(location.search).has('prewarm')) { // 非预热窗口才自动显示
   (async () => {
     try {

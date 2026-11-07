@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "gamepad_controler_tauri"
-version = "0.0.53"
+version = "0.0.55"
 dependencies = [
  "log",
  "serde",

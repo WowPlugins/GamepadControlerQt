@@ -258,6 +258,45 @@ impl Drop for PadInjectGuard {
     }
 }
 
+/// 发送一次 NumLock 切换（按下 + 抬起）。
+/// 不走 inject_key，避免 is_extended_key 给 NumLock 加 E0 前缀变成其它键。
+fn toggle_numlock() {
+    unsafe {
+        let mut inputs = [std::mem::zeroed::<INPUT>(), std::mem::zeroed::<INPUT>()];
+        inputs[0].r#type = INPUT_KEYBOARD;
+        inputs[0].Anonymous.ki = KEYBDINPUT {
+            wVk: VK_NUMLOCK,
+            wScan: 0x45,
+            dwFlags: KEYBD_EVENT_FLAGS::default(),
+            time: 0,
+            dwExtraInfo: 0,
+        };
+        inputs[1].r#type = INPUT_KEYBOARD;
+        inputs[1].Anonymous.ki = KEYBDINPUT {
+            wVk: VK_NUMLOCK,
+            wScan: 0x45,
+            dwFlags: KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: 0,
+        };
+        let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// 确保 NumLock 处于开启状态。
+/// 小键盘数字的扫描码在 NumLock 关闭时会被系统解释成方向/Home/End 等导航键，
+/// 游戏里就认成方向键；这里在小键盘数字注入前自动打开一次并保持开启。
+fn ensure_numlock_on() {
+    let on = unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 != 0 };
+    if on {
+        return;
+    }
+    toggle_numlock();
+    // 等系统真正切换状态后再注入数字，否则仍会按方向键解释
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    crate::dbg_log!("小键盘数字 注入前 NumLock 为关闭，已自动开启（否则游戏会认成方向键）");
+}
+
 /// 注入单个键盘事件（down=true 按下，false 松开）
 /// 使用 KEYEVENTF_SCANCODE（物理扫描码）模式：MSDN 规定该模式下 wVk 必须为 0。
 // 【Rust 语法】unsafe fn 表示「不安全的函数」：其内部可能进行 Rust 编译器无法证明安全的操作（此处调用
@@ -267,7 +306,22 @@ unsafe fn inject_key(code: i32, down: bool) { // 函数体开始
     if sc == 0 { // 扫描码为 0 表示未知键
         return; // 无法注入，直接返回
     } // 未知键分支结束
-    let mut flags = KEYEVENTF_SCANCODE; // 【Rust 语法】let mut 声明可变绑定（默认 let 不可变）；初始标志为「扫描码模式」
+    // 小键盘数字 0-9：改用 VK 模式注入（wVk = VK_NUMPAD0..9）
+    // 扫描码模式下系统会按当前 NumLock 状态把扫描码 0x47..0x52 解释成 Home/方向/End 等导航键，
+    // 游戏里就绑不到「数字小键盘 0-9」；用 VK 才能稳定送出小键盘数字
+    let numpad_vk = if (144..=153).contains(&code) {
+        Some(0x60u16 + (code - 144) as u16) // VK_NUMPAD0(0x60) 加偏移
+    } else {
+        None
+    };
+    let mut flags = if numpad_vk.is_some() {
+        if down {
+            ensure_numlock_on(); // 按下小键盘数字前确保 NumLock 开启，避免被解释成方向键
+        }
+        KEYBD_EVENT_FLAGS::default() // VK 模式（不带 SCANCODE 标志）
+    } else {
+        KEYEVENTF_SCANCODE // 其余键继续用扫描码模式
+    };
     if !down { // 若是松开事件（down 为 false）
         flags |= KEYEVENTF_KEYUP; // 【Rust 语法】|= 是按位或赋值运算符：给标志追加 KEYUP（松开）位
     } // 松开标志分支结束
@@ -281,7 +335,7 @@ unsafe fn inject_key(code: i32, down: bool) { // 函数体开始
         r#type: INPUT_KEYBOARD, // 事件类型：键盘输入
         Anonymous: INPUT_0 { // 联合体成员：键盘/鼠标数据区
             ki: KEYBDINPUT { // 键盘输入数据结构体
-                wVk: VIRTUAL_KEY(0), // 【Rust 语法】VIRTUAL_KEY(0) 是「newtype」元组结构体的构造：包一个 0 值虚拟键码（扫描码模式下必须为 0）
+                wVk: VIRTUAL_KEY(numpad_vk.unwrap_or(0)), // 小键盘数字给出明确 VK；其余键扫描码模式下必须为 0
                 wScan: sc, // 硬件扫描码（本实现使用扫描码而非虚拟键码）
                 dwFlags: flags, // 事件标志（扫描码模式/松开/扩展键）
                 time: 0, // 时间戳（0 表示由系统自动填充）
