@@ -246,6 +246,12 @@ impl AppCore {
         if !mapping.state_allows(|id| states.get(id)) {
             return;
         }
+        // 触发键在键盘钩子侧已被吞掉（游戏的按键流里没有它），但注入器内部可能
+        // 仍记录为「已按下」；不清掉的话，动作里再发同一个键会被去重逻辑跳过，
+        // 表现为「宏执行了但游戏没收到按键」
+        if let Some(r) = self.steam.profile.keyboard_rules.iter().find(|r| r.id == rule_id) {
+            self.injector.forget_key_down(r.key_code);
+        }
         self.mapper.handle_button(
             trigger,
             true,

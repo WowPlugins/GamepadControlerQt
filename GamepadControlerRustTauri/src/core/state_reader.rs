@@ -198,6 +198,9 @@ fn find_anchor(buf: &[u8]) -> Option<(i32, i32, i32, i32, i32)> {
     None
 }
 
+/// 首次成功解码时打印一次完整的采样详情，之后只在状态变化时输出（避免按采集周期刷屏）
+static FIRST_OK: AtomicBool = AtomicBool::new(true);
+
 /// 失败类日志限流：最多每秒输出一次，避免按 20Hz 采集时刷屏
 static LAST_FAIL_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -207,7 +210,7 @@ fn fail_log_allowed() -> bool {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let last = LAST_FAIL_MS.load(Ordering::Relaxed);
-    if now.saturating_sub(last) >= 1000 {
+    if now.saturating_sub(last) >= 3000 {
         LAST_FAIL_MS.store(now, Ordering::Relaxed);
         true
     } else {
@@ -372,7 +375,7 @@ fn decode(
         if truthy {
             bits |= 1u16 << i;
         }
-        if log_on {
+        if log_on && FIRST_OK.load(Ordering::Relaxed) {
             detail.push_str(&format!(
                 "{}={}(RGB {},{},{}), ",
                 state_display_name(STATE_IDS[i as usize]),
@@ -384,13 +387,13 @@ fn decode(
         }
     }
 
-    if log_on {
+    if log_on && FIRST_OK.swap(false, Ordering::Relaxed) {
         let names: Vec<&str> = (0..10)
             .filter(|i| bits & (1u16 << i) != 0)
             .map(|i| state_display_name(STATE_IDS[i as usize]))
             .collect();
         crate::dbg_log!(
-            "像素读取 原点=({},{}) 基准=({},{}) 锚点=RGB({},{},{}) 块={}x{} 步长={} 校验=RGB({},{},{}) 位=0b{:010b} 状态=[{}] 明细=[{}]",
+            "像素读取 首次成功 原点=({},{}) 基准=({},{}) 锚点=RGB({},{},{}) 块={}x{} 步长={} 校验=RGB({},{},{}) 位=0b{:010b} 状态=[{}] 明细=[{}]",
             origin_x,
             origin_y,
             origin_x + px,
@@ -410,6 +413,19 @@ fn decode(
         );
     }
     Some(bits)
+}
+
+/// 状态位 → 可读文本（如 "潜行中/战斗中"，无状态时返回 "无"）
+fn bits_text(v: u16) -> String {
+    let names: Vec<&str> = (0..10)
+        .filter(|i| v & (1u16 << i) != 0)
+        .map(|i| state_display_name(STATE_IDS[i as usize]))
+        .collect();
+    if names.is_empty() {
+        "无".to_string()
+    } else {
+        names.join("/")
+    }
 }
 
 /// 取游戏窗口客户区左上角的屏幕坐标（窗口最小化/无效时返回 None）
@@ -453,6 +469,7 @@ impl PixelReader {
         let running = Arc::clone(&self.running);
         self.handle = Some(thread::spawn(move || {
             let mut was_enabled = false; // 上周期采集开关，用于只在状态切换时打日志
+            let mut last_bits: Option<u16> = None; // 上次解出的状态位（变化时才打日志）
             let mut hwnd: isize = 0; // 缓存的游戏窗口句柄
             let mut last_lookup: Option<Instant> = None; // 上次查找窗口的时间
             let mut window_ok: Option<bool> = None; // 上次窗口是否找到（避免刷屏）
@@ -504,13 +521,33 @@ impl PixelReader {
                     let x = cfg.x.load(Ordering::SeqCst);
                     let y = cfg.y.load(Ordering::SeqCst);
                     match read_states(ox, oy, x, y) {
-                        Some(v) => bits.store(v),
-                        None => bits.store(0), // 插件未绘制（例如切出游戏）时清零
+                        Some(v) => {
+                            bits.store(v);
+                            // 状态位变化时单独打印一条，便于在日志里快速定位状态切换
+                            if last_bits != Some(v) {
+                                crate::dbg_log!(
+                                    "角色状态 变化 {} → {}（位=0b{:010b}）",
+                                    last_bits.map(bits_text).unwrap_or_else(|| "初始".to_string()),
+                                    bits_text(v),
+                                    v
+                                );
+                                last_bits = Some(v);
+                            }
+                        }
+                        None => {
+                            bits.store(0); // 插件未绘制（例如切出游戏）时清零
+                            if last_bits.is_some() && last_bits != Some(0) {
+                                crate::dbg_log!("角色状态 变化 {} → 无（插件未绘制，读取失败）", last_bits.map(bits_text).unwrap_or_default());
+                                last_bits = Some(0);
+                            }
+                        }
                     }
                     let ms = cfg.interval_ms.load(Ordering::SeqCst).max(10) as u64;
                     thread::sleep(Duration::from_millis(ms));
                 } else {
                     bits.store(0);
+                    last_bits = None; // 关闭采集后重置，重新开启时打印一次「初始 → ...」
+                    FIRST_OK.store(true, Ordering::Relaxed); // 下次启动采集时重新打印一次详情
                     window_ok = None;
                     hwnd = 0;
                     last_lookup = None;

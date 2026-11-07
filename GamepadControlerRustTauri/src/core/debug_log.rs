@@ -7,7 +7,11 @@
 // =====================================================================
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows::Win32::System::Console::{AllocConsole, GetConsoleWindow, SetConsoleOutputCP};
+use windows::Win32::System::Console::{
+    AllocConsole, GetConsoleMode, GetConsoleWindow, GetStdHandle, SetConsoleMode,
+    SetConsoleOutputCP, CONSOLE_MODE, ENABLE_EXTENDED_FLAGS, ENABLE_QUICK_EDIT_MODE,
+    STD_OUTPUT_HANDLE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOW, ShowWindow};
 
 // 日志总开关（原子量，任意线程可读写）
@@ -34,6 +38,8 @@ pub fn set_enabled(on: bool) {
             }
             // 控制台输出代码页设为 UTF-8，避免中文日志乱码
             let _ = SetConsoleOutputCP(65001);
+            // 打开"快速编辑"：鼠标可直接拖选日志复制（默认模式不支持）
+            enable_quick_edit();
             // 已分配但被隐藏过：重新显示
             let hwnd = GetConsoleWindow();
             if !hwnd.0.is_null() {
@@ -44,6 +50,18 @@ pub fn set_enabled(on: bool) {
             let hwnd = GetConsoleWindow();
             if !hwnd.0.is_null() {
                 let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+    }
+}
+
+/// 启用控制台"快速编辑"模式：可用鼠标拖选文本、Ctrl+C 复制
+fn enable_quick_edit() {
+    unsafe {
+        if let Ok(std) = GetStdHandle(STD_OUTPUT_HANDLE) {
+            let mut mode = CONSOLE_MODE(0);
+            if GetConsoleMode(std, &mut mode).is_ok() {
+                let _ = SetConsoleMode(std, mode | ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS);
             }
         }
     }

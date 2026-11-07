@@ -14,15 +14,15 @@
 // =====================================================================
 
 use crate::core::app::AppCore;
-use crate::core::injector::android_key_code_to_windows_vk;
+use crate::core::injector::{android_key_code_to_windows_vk, EXTRA_PAD_MAP};
 use crate::core::mapping_types::{ControllerProfile, KeyMapping};
 use crate::core::state_reader::StateBits;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
@@ -118,6 +118,48 @@ fn foreground_is_self() -> bool {
     }
 }
 
+/// 规则日志限流：连按按键时最多每 300ms 输出一条，避免钩子回调里刷日志
+static LAST_KB_LOG_MS: AtomicU64 = AtomicU64::new(0);
+
+fn kb_log_allowed() -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_KB_LOG_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= 300 {
+        LAST_KB_LOG_MS.store(now, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+/// 已记录过的按键 VK 位图（256 位）：每个键码只在第一次出现时打一条日志，
+/// 避免限流把关键按键（如要排查的那个键）的日志吞掉
+static SEEN_VKS: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+/// 放行（注入/前台为本程序）按键的 VK 位图，与物理按键分开记录，互不影响
+static SEEN_PASS: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+fn first_seen(bitmap: &[AtomicU64; 4], vk: u32) -> bool {
+    if vk >= 256 {
+        return true;
+    }
+    let idx = (vk / 64) as usize;
+    let bit = 1u64 << (vk % 64);
+    bitmap[idx].fetch_or(bit, Ordering::Relaxed) & bit == 0
+}
+
 /// 低级键盘钩子回调（在钩子线程执行，必须尽快返回）
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // 非 HC_ACTION 交给下一个钩子
@@ -130,8 +172,22 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     };
     // 取出按键信息（lparam 指向 KBDLLHOOKSTRUCT）
     let info = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-    // 本程序 SendInput 注入的键：直接放行，避免自己触发自己形成循环
-    if info.flags.contains(LLKHF_INJECTED) || foreground_is_self() {
+    // 只有「本程序手柄映射发出的键」（带来源标记）允许继续参与规则匹配：
+    //   - 命中规则 -> 吞掉并执行映射动作（规则不命中时它会被原样放行给游戏）；
+    //   - 其他注入键（状态宏 / 键盘规则动作 / 外部软件）直接放行，避免自己触发自己；
+    //   - 物理按键在本程序前台时放行（在设置页按键不触发）。
+    let injected = info.flags.contains(LLKHF_INJECTED);
+    let from_pad = injected && info.dwExtraInfo == EXTRA_PAD_MAP;
+    if injected && !from_pad {
+        if first_seen(&SEEN_PASS, info.vkCode) {
+            crate::dbg_log!("键盘钩子 放行按键VK={}（注入按键）", info.vkCode);
+        }
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
+    if !injected && foreground_is_self() {
+        if first_seen(&SEEN_PASS, info.vkCode) {
+            crate::dbg_log!("键盘钩子 放行按键VK={}（前台是本程序）", info.vkCode);
+        }
         return CallNextHookEx(None, code, wparam, lparam);
     }
 
@@ -155,16 +211,52 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     // 规则匹配：修饰键集合严格相等 + 主键一致 + 状态条件满足
     let mods = current_mods();
     let rules = ctx.rules().clone();
+    let mut vk_seen = false; // 当前按键是否有规则主键与之相同
     for rule in rules.iter() {
-        if rule.main_vk as u32 != vk || rule.mods != mods {
+        if rule.main_vk as u32 != vk {
+            continue;
+        }
+        vk_seen = true;
+        if rule.mods != mods {
+            // 主键相同但修饰键不符（例如规则要求 Ctrl+7，实际只按了 7）
+            if kb_log_allowed() {
+                crate::dbg_log!(
+                    "键盘规则 规则id={} 按键VK={} 修饰键不匹配（当前=0b{:04b} 需要=0b{:04b}）",
+                    rule.id,
+                    vk,
+                    mods,
+                    rule.mods
+                );
+            }
             continue;
         }
         if !rule.mapping.state_allows(|id| ctx.states.get(id)) {
-            continue; // 状态条件不满足：当作没命中，放行给游戏
+            // 状态条件不满足：当作没命中，放行给游戏（打日志便于排查「规则不触发」）
+            if kb_log_allowed() {
+                crate::dbg_log!(
+                    "键盘规则 规则id={} 按键VK={} 状态条件不满足，放行原始按键（当前状态位=0b{:010b}）",
+                    rule.id,
+                    vk,
+                    ctx.states.load()
+                );
+            }
+            continue;
         }
+        // 命中日志不限流：松开后才会再次进入，重复 keydown 已被上面吞掉，不会刷屏
+        crate::dbg_log!("键盘规则 规则id={} 命中 按键VK={}（状态位=0b{:010b}）", rule.id, vk, ctx.states.load());
         ctx.swallowed().insert(vk, rule.id);
         let _ = ctx.tx().send(KbEvent::Press(rule.id));
         return LRESULT(1);
+    }
+
+    // 按下但完全没有规则匹配：每个键码只打印第一次，便于排查「键码对不上」
+    if !vk_seen && first_seen(&SEEN_VKS, vk) {
+        let keys: Vec<String> = rules.iter().map(|r| r.main_vk.to_string()).collect();
+        crate::dbg_log!(
+            "键盘钩子 收到按键VK={} 无规则匹配（已加载主键VK=[{}]）",
+            vk,
+            keys.join(",")
+        );
     }
 
     CallNextHookEx(None, code, wparam, lparam)
@@ -221,8 +313,21 @@ fn run_hook_loop(running: Arc<AtomicBool>, thread_id: Arc<AtomicU32>) {
         };
         let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), Some(HINSTANCE(hmod.0)), 0) {
             Ok(h) => h,
-            Err(_) => return, // 安装失败（权限等原因）时直接退出
+            Err(e) => {
+                // 安装失败（权限等原因）：直接退出并把原因写进日志
+                crate::dbg_log!("键盘钩子 安装失败（{:?}），物理键盘规则不会生效", e);
+                return;
+            }
         };
+        // 打印已编译的规则主键，便于确认与物理按键是否匹配
+        match HOOK_CTX.get() {
+            Some(ctx) => {
+                let rules = ctx.rules().clone();
+                let keys: Vec<String> = rules.iter().map(|r| r.main_vk.to_string()).collect();
+                crate::dbg_log!("键盘钩子 已安装 规则数={} 主键VK=[{}]", rules.len(), keys.join(","));
+            }
+            None => crate::dbg_log!("键盘钩子 已安装（规则上下文缺失）"),
+        }
         // stop() 需要线程 id 才能投递 WM_QUIT 唤醒阻塞中的 GetMessageW
         thread_id.store(GetCurrentThreadId(), Ordering::SeqCst);
 
@@ -240,6 +345,9 @@ fn run_hook_loop(running: Arc<AtomicBool>, thread_id: Arc<AtomicU32>) {
 
 /// worker 线程主循环：把按键事件转成 AppCore 调用
 fn run_worker(rx: Receiver<KbEvent>, core: Arc<Mutex<AppCore>>, running: Arc<AtomicBool>) {
+    // 本线程注入的键来自「键盘规则动作」，不能标记为手柄映射，
+    // 否则动作发出的键会被钩子再次匹配形成死循环
+    crate::core::injector::set_pad_inject(false);
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(KbEvent::Quit) => break,

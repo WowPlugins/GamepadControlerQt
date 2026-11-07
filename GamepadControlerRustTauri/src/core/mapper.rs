@@ -257,21 +257,21 @@ impl MapperState {
             // 【Rust 语法】`subs.iter().rev()`：反向迭代引用；`sub` 为元素引用 &i32，`*sub` 解引用取 i32 值。
             for sub in subs.iter().rev() { // 非修饰子命令先释放
                 if !is_modifier_key(*sub) { // 非修饰键
-                    injector.send_key_up(*sub); // 逐个发送键抬起事件
+                    injector.force_key_up(*sub); // 强制抬起：按下记录可能已被触发通道消耗
                 } // 结束 if 判断
             } // 结束 for 循环
             // 释放主键
             if let Some(main) = self.pressed_main_keys.remove(&button) {
-                injector.send_key_up(main); // 发送主键抬起
+                injector.force_key_up(main); // 强制抬起主键
             } // 结束 if let 分支
             // 修饰子命令最后释放
             for sub in subs.iter().rev() { // 修饰键最后释放
                 if is_modifier_key(*sub) { // 修饰键
-                    injector.send_key_up(*sub); // 逐个发送键抬起事件
+                    injector.force_key_up(*sub); // 强制抬起：按下记录可能已被触发通道消耗
                 } // 结束 if 判断
             } // 结束 for 循环
         } else if let Some(main) = self.pressed_main_keys.remove(&button) { // 无子命令时直接释放主键
-            injector.send_key_up(main); // 发送主键抬起
+            injector.force_key_up(main); // 强制抬起主键
         } // 结束 if let 分支
         // 释放鼠标（不处理长按保持的）
         if let Some(mb) = self.pressed_mouse_buttons.remove(&button) {
@@ -545,6 +545,9 @@ impl MapperState {
         event_tx: &Sender<UiEvent>,
         wow_exe: &str, // 目标游戏 exe（按游戏客户区计算居中坐标）
     ) {
+        // 宏内部注入的按键不能被键盘规则再次匹配（否则手柄键 7 会无限自触发），
+        // 进入时临时关掉「手柄映射」来源标记，离开作用域自动恢复
+        let _pad_guard = crate::core::injector::PadInjectGuard::off();
         // 1) 解除所有右键锁存
         let mut released = false; // 是否实际解锁过（决定是否需要等待）
         let right_toggled: Vec<TriggerId> = self

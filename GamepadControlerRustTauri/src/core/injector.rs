@@ -220,6 +220,44 @@ fn mouse_flags_for(b: MouseButton) -> (MOUSE_EVENT_FLAGS, MOUSE_EVENT_FLAGS, u32
     } // match 结束，返回三元组
 } // 函数结束
 
+/// 注入来源标记：手柄映射发出的键带此 dwExtraInfo 值，低级键盘钩子据此允许
+/// 它继续参与「物理键盘规则」匹配（规则不命中时原样透传给游戏）；
+/// 状态宏 / 键盘规则动作发出的键不带标记，钩子直接放行，避免自己触发自己形成死循环。
+pub const EXTRA_PAD_MAP: usize = 0x5041_444D; // "PADM"
+
+thread_local! {
+    /// 当前线程注入的键是否标记为「手柄映射发出」（手柄线程默认 true，
+    /// 键盘规则 worker 线程启动时关掉，状态宏执行期间临时关掉）
+    static PAD_INJECT: std::cell::Cell<bool> = std::cell::Cell::new(true);
+}
+
+/// 设置当前线程的注入来源标记（true = 手柄映射）
+pub fn set_pad_inject(on: bool) {
+    PAD_INJECT.with(|c| c.set(on));
+}
+
+/// 当前线程的注入来源标记
+pub fn pad_inject() -> bool {
+    PAD_INJECT.with(|c| c.get())
+}
+
+/// 作用域守卫：进入时关闭「手柄映射」标记，离开时恢复原值
+pub struct PadInjectGuard(bool);
+
+impl PadInjectGuard {
+    pub fn off() -> Self {
+        let old = pad_inject();
+        set_pad_inject(false);
+        Self(old)
+    }
+}
+
+impl Drop for PadInjectGuard {
+    fn drop(&mut self) {
+        set_pad_inject(self.0);
+    }
+}
+
 /// 注入单个键盘事件（down=true 按下，false 松开）
 /// 使用 KEYEVENTF_SCANCODE（物理扫描码）模式：MSDN 规定该模式下 wVk 必须为 0。
 // 【Rust 语法】unsafe fn 表示「不安全的函数」：其内部可能进行 Rust 编译器无法证明安全的操作（此处调用
@@ -247,7 +285,7 @@ unsafe fn inject_key(code: i32, down: bool) { // 函数体开始
                 wScan: sc, // 硬件扫描码（本实现使用扫描码而非虚拟键码）
                 dwFlags: flags, // 事件标志（扫描码模式/松开/扩展键）
                 time: 0, // 时间戳（0 表示由系统自动填充）
-                dwExtraInfo: 0, // 附加信息（未使用）
+                dwExtraInfo: if pad_inject() { EXTRA_PAD_MAP } else { 0 }, // 来源标记（手柄映射 / 其他）
             }, // KEYBDINPUT 结构体结束
         }, // INPUT_0 联合体成员结束
     }; // INPUT 结构体结束
@@ -375,6 +413,28 @@ impl InputInjector {
         } // 去重分支结束
         drop(st); // 提前解锁
         unsafe { inject_key(android_key_code, false) }; // 注入「松开」事件
+    } // 方法结束
+
+    /// 清除「已按下」记录但不注入松开事件。
+    /// 用于按键在键盘钩子侧被吞掉的场景：游戏的按键流里没有这个键，
+    /// 但注入器内部已记录为按下；不清掉的话，动作中再发同一个键会被去重跳过。
+    pub fn forget_key_down(&self, android_key_code: i32) {
+        if let Ok(mut st) = self.state.lock() {
+            st.pressed_keys.remove(&android_key_code);
+        }
+    } // 方法结束
+
+    /// 强制松开：无论去重表里是否还有记录都注入抬起事件。
+    /// 用于「按下记录被其他通道提前消耗」的场景（手柄映射与规则宏共用一张去重表，
+    /// 手柄那一路的抬起若被键盘钩子吞掉，宏再释放时就没有记录了，会让游戏一直按住）。
+    pub fn force_key_up(&self, android_key_code: i32) {
+        if android_key_code_to_windows_vk(android_key_code) == 0 {
+            return;
+        }
+        if let Ok(mut st) = self.state.lock() {
+            st.pressed_keys.remove(&android_key_code);
+        }
+        unsafe { inject_key(android_key_code, false) };
     } // 方法结束
 
     /// 按下鼠标按键（去重）
