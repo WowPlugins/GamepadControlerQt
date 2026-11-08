@@ -54,6 +54,8 @@ pub struct AppCore {
     pub profile_rev: u64,
     // 【Rust 语法】私有字段（无 pub，外部不可见）：`Sender<UiEvent>` 是 mpsc 通道发送端，UI 事件从这里发出。
     event_tx: Sender<UiEvent>,
+    /// 上一帧的前台窗口句柄（0 表示尚未记录），用于检测前台切换
+    last_foreground: isize,
 }
 
 // 【Rust 语法】`impl AppCore { ... }`：为 AppCore 类型定义方法块；块内的函数称为关联函数/方法，可通过 `实例.方法()` 调用。
@@ -80,6 +82,8 @@ impl AppCore {
             profile_rev: 0,
             // 字段简写：把 event_tx 存入结构体。
             event_tx,
+            // 初始：尚未记录前台窗口。
+            last_foreground: 0,
         }
     }
 
@@ -179,6 +183,25 @@ impl AppCore {
             }
             // 轮询心跳：检查待判定的长按是否达到阈值（需求2）
             SourceEvent::Tick => {
+                // 前台窗口切换：按全局设置释放所有输入。
+                // 否则注入的右键会一直保持按下（切到别的程序后表现为鼠标"粘住"），
+                // 且回到游戏时系统仍认为右键按着，新的「按下」不会再产生，视角锁不住。
+                if self.steam.profile.global_settings.release_on_foreground_change {
+                    let fg = crate::core::wow_sender::foreground_hwnd();
+                    if self.last_foreground != 0 && fg != self.last_foreground {
+                        crate::dbg_log!(
+                            "前台切换 {} → {}，释放所有输入",
+                            self.last_foreground,
+                            fg
+                        );
+                        self.mapper.release_all_inputs(
+                            self.injector.as_ref(),
+                            &self.event_tx,
+                            self.look.as_ref(),
+                        );
+                    }
+                    self.last_foreground = fg;
+                }
                 let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（长按动作为状态宏时居中用）
                 self.mapper.check_long_press(
                     self.injector.as_ref(),

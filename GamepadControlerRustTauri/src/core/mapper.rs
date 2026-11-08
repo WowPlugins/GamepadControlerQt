@@ -179,8 +179,6 @@ pub struct MapperState {
     pub extra_toggled: HashSet<MouseButton>,
     /// WASD 拦截自动锁定的鼠标右键
     pub auto_locked_right: bool,
-    /// 自动锁定前保存的光标位置（解锁时还原）
-    pub auto_lock_saved_pos: Option<(i32, i32)>,
     /// 待判定的长按：触发源 -> 长按信息
     pub pending_long_press: HashMap<TriggerId, PendingLongPress>,
     /// 已触发长按的触发源（松开时按长按动作释放）
@@ -240,9 +238,14 @@ impl MapperState {
         self.extra_toggled.clear(); // 清空无来源锁存（注入器已统一松开）
         self.pressed_mouse_layer.clear(); // 清空鼠标单击来源层记录
         self.auto_locked_right = false; // 清除自动锁定标记
-        self.auto_lock_saved_pos = None; // 清除自动锁定前保存的光标位置
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
+        // 直发通道（PostMessage）按下的 WASD 不在注入器记录里，需单独抬起，避免游戏里卡键
+        if self.stick_keys_via_post && self.wow_hwnd != 0 {
+            for kc in self.left_stick_pressed_keys.iter().copied() {
+                wow_sender::send_key(self.wow_hwnd, kc, false); // 向目标窗口补发松开
+            }
+        }
         self.stick_keys_via_post = false; // 复位左摇杆投递通道标记
         self.pressed_main_keys.clear(); // 清空主键记录
         self.pressed_sub_keys.clear(); // 清空子命令记录
@@ -671,6 +674,12 @@ impl MapperState {
         event_tx: &Sender<UiEvent>,
         wow_exe: &str, // 目标游戏 exe（居中按游戏客户区计算）
     ) {
+        crate::dbg_log!(
+            "动作：释放鼠标锁存（自动锁={} 按钮锁存={} 交换锁存={}）",
+            self.auto_locked_right,
+            self.toggled_mouse_buttons.len(),
+            self.extra_toggled.len()
+        );
         // 释放所有由手柄按钮建立的锁存
         let mut released = false; // 是否实际释放过鼠标锁存（决定是否需要等待）
         let toggled: Vec<(TriggerId, MouseButton)> = self.toggled_mouse_buttons.drain().collect();
@@ -691,7 +700,7 @@ impl MapperState {
         if released {
             thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 解锁后等待，让游戏先处理抬起事件
         }
-        // 需求4：释放锁存后把鼠标移到游戏画面正中央（含 WASD 拦截还原光标之后再次居中）
+        // 需求4：释放锁存后把鼠标移到游戏画面正中央（WASD 自动锁定解除后同样居中）
         // 按游戏客户区计算：游戏非全屏时主屏中心会落到画面外，光标等于没进游戏。
         let (cx, cy) = self.target_center(wow_exe, injector);
         injector.move_cursor_absolute(cx, cy); // 光标移到游戏画面中央（SendInput 绝对移动，游戏可感知）
@@ -713,6 +722,12 @@ impl MapperState {
         // 1) 记录交换前的左右键锁存状态
         let left_locked = self.is_mouse_locked(MouseButton::Left);
         let right_locked = self.is_mouse_locked(MouseButton::Right);
+        crate::dbg_log!(
+            "动作：交换左右键锁存（左={} 右={} 自动锁={}）",
+            left_locked,
+            right_locked,
+            self.auto_locked_right
+        );
         if !left_locked && !right_locked {
             return; // 都没锁定，无需交换
         }
@@ -765,7 +780,7 @@ impl MapperState {
         self.toggled_mouse_buttons.values().any(|b| *b == mb) // 由手柄按钮建立的锁存
     } // 结束 is_mouse_locked 函数
 
-    /// 释放 WASD 拦截自动锁定的右键（并还原光标位置）
+    /// 释放 WASD 拦截自动锁定的右键
     fn release_auto_right_lock(&mut self, injector: &InputInjector) {
         if !self.auto_locked_right {
             return; // 未自动锁定
@@ -777,15 +792,13 @@ impl MapperState {
             .any(|b| *b == MouseButton::Right)
             || self.extra_toggled.contains(&MouseButton::Right);
         if other_lock {
+            crate::dbg_log!("释放自动右键：检测到其他右键锁存，仅清除自动标记");
             self.auto_locked_right = false; // 仅清除自动标记，保留用户锁存
-            self.auto_lock_saved_pos = None;
             return;
         }
+        crate::dbg_log!("释放自动右键：真正松开注入的右键");
         injector.send_mouse_up(MouseButton::Right); // 松开自动锁定的右键
         self.auto_locked_right = false;
-        if let Some((x, y)) = self.auto_lock_saved_pos.take() {
-            injector.set_cursor_pos(x, y); // 光标还原到锁定前位置
-        }
     } // 结束 release_auto_right_lock 函数
 
     // -----------------------------------------------------------------
@@ -906,19 +919,47 @@ impl MapperState {
             target.insert(android_key::D); // 向右：加入 D 键
         } // 结束 if 判断
 
+        // 状态自检：标记说已自动锁定，但注入器已不再按住右键（被其他来源的右键抬起清掉了），
+        // 此时标记失效，必须清除，否则 is_mouse_locked 恒为 true，自动锁定再也无法重建。
+        if self.auto_locked_right && !injector.is_mouse_down(MouseButton::Right) {
+            crate::dbg_log!("自动锁定标记失效：注入记录里已无右键，将重新建立");
+            self.auto_locked_right = false;
+        }
+
+        // 自动锁定只在目标游戏处于前台时进行：否则右键会被注入到别的程序，
+        // 表现为切到其他应用后鼠标仍被"按住"；游戏回到前台后也不会重新产生「按下」，
+        // 只能在游戏里按一次右键才能恢复。
+        // 这里只解析一次窗口句柄，后续锁定与直发通道复用，避免多次枚举命中不同窗口。
+        let wow_hwnd = self.resolve_wow_hwnd(wow_exe);
+        let game_foreground = match wow_hwnd {
+            Some(h) => wow_sender::is_foreground(h), // 找到目标窗口：只在前台时锁定
+            None => true, // 未配置或暂时找不到窗口：不限制（保持原行为，避免永久锁不住）
+        };
+
         // 需求3：WASD 触发拦截
         // 排除场景：鼠标左键处于锁存状态（例如按住左键拖拽/交互）时不自动锁右键、不挪光标，
         // WASD 继续走常规 SendInput，避免打断左键操作。
         if !target.is_empty()
+            && game_foreground
             && !self.is_mouse_locked(MouseButton::Right)
             && !self.is_mouse_locked(MouseButton::Left)
         { // 左右键均未锁存才自动锁定右键
-            let (w, h) = injector.screen_size();
-            self.auto_lock_saved_pos = Some(injector.get_cursor_pos()); // 记录锁定前光标位置
-            // 屏幕左下角、屏幕外 2/3 处（系统会把越界坐标钳制到屏幕边缘）
-            injector.set_cursor_pos(-(w * 2 / 3), h + h * 2 / 3);
+            // 光标先移到屏幕外左下角（越界坐标会被系统钳制到屏幕边缘），再锁定右键。
+            // 这是自动锁定的原有行为：作用是把光标挪出游戏画面，避免右键拖拽时光标乱跑。
+            let (sw, sh) = injector.screen_size();
+            injector.set_cursor_pos(-(sw * 2 / 3), sh + sh * 2 / 3);
+            // 先无条件松开一次再按下，保证产生一个干净的「按下沿」：
+            // 系统认为已按下时，重复注入的「按下」不会产生新事件，游戏收不到拖拽。
+            injector.force_mouse_up(MouseButton::Right);
             injector.send_mouse_down(MouseButton::Right); // 锁定鼠标右键
             self.auto_locked_right = true;
+            crate::dbg_log!(
+                "WASD 自动锁定：hwnd={} 前台={} 记录={} 系统={}",
+                wow_hwnd.unwrap_or(0),
+                game_foreground,
+                injector.is_mouse_down(MouseButton::Right),
+                injector.os_mouse_down(MouseButton::Right)
+            );
         } // 结束拦截分支
 
         // 右键锁存时把 WASD 直发目标窗口，否则走常规 SendInput
@@ -926,8 +967,7 @@ impl MapperState {
         // PostMessage 投递的 WM_KEYDOWN 不会被识别（表现就是左摇杆完全没反应），
         // 只有游戏不在前台时才用直发通道。
         let hwnd = if self.is_mouse_locked(MouseButton::Right) {
-            self.resolve_wow_hwnd(wow_exe)
-                .filter(|h| !wow_sender::is_foreground(*h))
+            wow_hwnd.filter(|h| !wow_sender::is_foreground(*h))
         } else {
             None
         };

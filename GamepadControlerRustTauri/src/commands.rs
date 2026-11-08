@@ -88,7 +88,8 @@ pub struct OverlaySnapshot { // 悬浮窗整体快照
     connected: bool, // 手柄连接状态
     pressed: Vec<String>, // 当前被按下的按钮显示名集合
     pressed_rows: Vec<PressedRow>, // 按下的按钮与其映射功能（收起状态也显示功能）
-    mouse_toggle: bool, // 是否有鼠标长按锁存
+    mouse_toggle: Option<String>, // 鼠标左右键锁存文案（含 WASD 自动锁定 / 交换锁存；None = 无锁存）
+    auto_right_lock: bool, // 是否为 WASD 左摇杆自动锁定的右键
     mappings: Vec<MappingRow>, // 当前层按键映射行列表
     /// 当前操作集内映射最多的层的映射数，前端据此用占位行固定展开高度（切层不伸缩）
     max_mappings: usize, // 最大映射数
@@ -418,7 +419,8 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         })
         .collect();
     pressed_rows.sort_by(|a, b| a.button.cmp(&b.button)); // 按按钮名排序，避免抖动
-    let mouse_toggle = !core.mapper.toggled_mouse_buttons.is_empty(); // 【Rust 语法】! 取反：集合非空则 true
+    let mouse_toggle = core.mapper.lock_summary(); // 鼠标左右键锁存文案（含 WASD 自动锁定 / 交换锁存）
+    let auto_right_lock = core.mapper.auto_locked_right; // 是否为 WASD 左摇杆自动锁定的右键
     // 当前层映射列表：最后激活的操作层，否则公共层
     let active_layers = core.steam.get_active_layers(); // 获取当前激活的层引用数组
     let layer_ref = if active_layers.is_empty() { // 【Rust 语法】if 表达式：分支都返回值，赋给 layer_ref
@@ -457,7 +459,8 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
         connected, // 连接状态
         pressed, // 按住的按钮列表
         pressed_rows, // 按住的按钮 + 映射功能
-        mouse_toggle, // 鼠标长按标志
+        mouse_toggle, // 鼠标锁存文案（None = 无锁存）
+        auto_right_lock, // 是否 WASD 自动锁定右键
         mappings, // 映射行列表
         max_mappings, // 最大映射数（用于固定展开高度）
         opacity, // 透明度

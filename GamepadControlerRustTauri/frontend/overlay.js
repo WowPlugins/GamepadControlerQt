@@ -99,9 +99,16 @@ function render(snap) {
         + '</span>').join(''));
 
   // L3 锁存警示（边框变橙 + 警示条）；ov-warn 固定高度占位，锁存切换只换内容不改变悬浮窗高度
-  const mouseToggle = !!snap.mouse_toggle; // 是否有鼠标长按锁存
+  const lockText = snap.mouse_toggle || ''; // 鼠标左右键锁存文案（空串 = 无锁存，含 WASD 自动锁定 / 交换锁存）
+  const autoLock = !!snap.auto_right_lock; // 右键是否为 WASD 左摇杆自动锁定
+  const mouseToggle = lockText !== ''; // 是否有鼠标锁存
+  const leftLocked = lockText.indexOf('左键') >= 0; // 文案里含左键 = 左键也被锁存
+  let warnText = '鼠标长按锁存中，再按一次解除'; // 默认：由手柄按钮建立的锁存
+  if (autoLock) { // 自动锁定的右键不能靠「再按一次」解除，文案要指明解除方式
+    warnText = (leftLocked ? '左右键锁定中（右键自动）' : '鼠标右键锁定中（WASD 自动）');
+  }
   setHTML('ov-warn', mouseToggle // 锁存时橙色警示条，平时弱化占位（高度恒定，避免悬浮窗抖动）
-    ? '<div class="overlay-warn">⚠ 鼠标长按锁存中，再按一次解除</div>'
+    ? '<div class="overlay-warn">⚠ ' + esc(warnText) + '</div>'
     : '<span class="overlay-dim">长按锁存: 无</span>');
   $('overlay-card').classList.toggle('mouse-toggle', mouseToggle); // 切换卡片橙色内光晕样式
 

@@ -220,6 +220,19 @@ fn mouse_flags_for(b: MouseButton) -> (MOUSE_EVENT_FLAGS, MOUSE_EVENT_FLAGS, u32
     } // match 结束，返回三元组
 } // 函数结束
 
+/// 查询鼠标键的真实系统按下状态（GetAsyncKeyState：既包含注入事件，也包含用户物理按键）
+fn os_mouse_button_down(b: MouseButton) -> bool { // 函数体开始
+    let vk: u16 = match b { // 按鼠标键枚举匹配对应的虚拟键码
+        MouseButton::Left => VK_LBUTTON.0, // 左键
+        MouseButton::Right => VK_RBUTTON.0, // 右键
+        MouseButton::Middle => VK_MBUTTON.0, // 中键
+        MouseButton::Forward => VK_XBUTTON2.0, // 前进键（与 mouse_flags_for 的 XBUTTON2 对应）
+        MouseButton::Back => VK_XBUTTON1.0, // 后退键（对应 XBUTTON1）
+    };
+    // 最高位为 1 表示当前处于按下状态
+    unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 }
+} // 函数结束
+
 /// 注入来源标记：手柄映射发出的键带此 dwExtraInfo 值，低级键盘钩子据此允许
 /// 它继续参与「物理键盘规则」匹配（规则不命中时原样透传给游戏）；
 /// 状态宏 / 键盘规则动作发出的键不带标记，钩子直接放行，避免自己触发自己形成死循环。
@@ -491,17 +504,25 @@ impl InputInjector {
         unsafe { inject_key(android_key_code, false) };
     } // 方法结束
 
-    /// 按下鼠标按键（去重）
+    /// 按下鼠标按键（记录里已按下时忽略重复）
     pub fn send_mouse_down(&self, button: MouseButton) { // 按下鼠标键
         let mut st = self.state.lock().unwrap(); // 获取互斥锁
-        if !st.pressed_buttons.insert(button) { // 已按下则忽略重复
+        if !st.pressed_buttons.insert(button) { // 集合里已存在 = 已经按下过
             return; // 已按下，忽略重复
         } // 去重分支结束
         drop(st); // 提前解锁
         unsafe { inject_mouse_button_raw(button, true) }; // 注入鼠标「按下」事件
     } // 方法结束
 
-    /// 松开鼠标按键（只在确实按下过时发送）
+    /// 无条件发送一次鼠标松开并清掉记录（用于强制重建按下沿）
+    pub fn force_mouse_up(&self, button: MouseButton) {
+        let mut st = self.state.lock().unwrap(); // 获取互斥锁
+        st.pressed_buttons.remove(&button); // 清掉记录
+        drop(st); // 提前解锁
+        unsafe { inject_mouse_button_raw(button, false) }; // 无条件注入「松开」
+    } // 方法结束
+
+    /// 松开鼠标按键（只在记录里确实按下过时发送）
     pub fn send_mouse_up(&self, button: MouseButton) { // 松开鼠标键
         let mut st = self.state.lock().unwrap(); // 获取互斥锁
         if !st.pressed_buttons.remove(&button) { // 未按下过则忽略
@@ -510,6 +531,18 @@ impl InputInjector {
         drop(st); // 提前解锁
         unsafe { inject_mouse_button_raw(button, false) }; // 注入鼠标「松开」事件
     } // 方法结束
+
+    /// 查询注入记录里某个鼠标键是否处于按下状态
+    pub fn is_mouse_down(&self, button: MouseButton) -> bool { // 只读查询
+        // 以注入记录为准：GetAsyncKeyState 在手柄轮询线程（后台线程）查询、
+        // 且当前台窗口属于其它进程时可能返回 0，用它做自检会每帧误判「没按着」。
+        self.state.lock().unwrap().pressed_buttons.contains(&button)
+    } // 方法结束
+
+    /// 查询系统真实按键状态（仅用于诊断日志；后台线程可能不可靠）
+    pub fn os_mouse_down(&self, button: MouseButton) -> bool {
+        os_mouse_button_down(button)
+    }
 
     /// 滚动鼠标滚轮（steps>0 上滚、<0 下滚，单位：格）
     pub fn send_mouse_wheel(&self, steps: i32) { // 滚轮方法

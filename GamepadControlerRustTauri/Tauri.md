@@ -646,7 +646,8 @@ class OverlaySnapshot {
   set_name / layer_name: String
   connected: bool
   pressed: Vec<String>
-  mouse_toggle: bool
+  mouse_toggle: Option<String>
+  auto_right_lock: bool
   mappings: Vec<MappingRow>
   opacity: f32
 }

@@ -46,6 +46,11 @@ pub fn is_foreground(hwnd: isize) -> bool {
     unsafe { GetForegroundWindow() == HWND(hwnd as *mut core::ffi::c_void) }
 }
 
+/// 取当前前台窗口句柄（无前台窗口时返回 0）
+pub fn foreground_hwnd() -> isize {
+    unsafe { GetForegroundWindow().0 as isize }
+}
+
 /// 取窗口客户区中心的屏幕坐标（窗口失效时返回 None）
 /// 游戏窗口不一定是全屏：按主屏中心移动光标会落到游戏画面外，
 /// 「居中」必须基于游戏客户区计算。
@@ -132,6 +137,20 @@ pub fn find_window_by_exe(exe_path: &str) -> Option<isize> {
         found: 0,
     };
     unsafe {
+        // 优先采用当前前台窗口：游戏进程可能同时有多个可见顶层窗口，
+        // 枚举到的第一个未必是游戏主窗口，会让「是否前台」判断失效。
+        let fg = GetForegroundWindow();
+        if !fg.0.is_null() {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(fg, Some(&mut pid));
+            if pid != 0 {
+                if let Some(path) = process_image_path(pid) {
+                    if normalize_path(&path) == ctx.target {
+                        return Some(fg.0 as isize);
+                    }
+                }
+            }
+        }
         // 【Rust 语法】WNDENUMPROC 是 Option<unsafe extern "system" fn(..)>；传 Some(函数指针)
         let _ = EnumWindows(Some(enum_windows_proc), LPARAM(&mut ctx as *mut FindContext as isize));
     }
