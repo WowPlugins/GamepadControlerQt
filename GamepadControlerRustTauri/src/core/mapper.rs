@@ -312,7 +312,7 @@ impl MapperState {
             let had_pending = self.pending_long_press.remove(&button).is_some(); // 是否还有未判定的长按
             // 配置了长按但未超阈值就松开：此时才执行短按动作（按下记录 + 立即释放 = 一次点按），
             // 这样长按时不会先误触发短按。切层动作在按下时已执行，跳过以免重复切层。
-            if had_pending && !fired_long && mapping.action.r#type != ActionType::SwitchLayer {
+            if had_pending && !fired_long && !matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
                 self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe);
             }
             // 精细移动：按「本次实际执行的动作」复位——长按触发时用长按动作类型，否则用主动作类型
@@ -330,7 +330,7 @@ impl MapperState {
         if let Some(long_action) = &mapping.long_press {
             // 配置了长按动作：按下先不执行短按，等松开（未超阈值）或 Tick 判定超阈值后再决定，
             // 避免长按时先触发一次短按（点击）。
-            if mapping.action.r#type == ActionType::SwitchLayer {
+            if matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
                 self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
             }
             let threshold = mapping.long_press_ms.clamp(100, 5000); // 阈值限幅 100~5000ms
@@ -423,6 +423,11 @@ impl MapperState {
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
                 self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);
+            }
+            ActionType::SwitchLayerAndKey => { // 切层+按键：层已由 SteamInput 激活，此处只注入组合键
+                if action.key_code != 0 { // 未选按键（0）时只切层，不注入
+                    self.handle_keyboard_key(button, action.key_code, subs, injector);
+                }
             }
             // 【Rust 语法】模式 `|`（或）匹配：多个变体共享同一分支代码。
             ActionType::SwitchLayer // 切换层动作

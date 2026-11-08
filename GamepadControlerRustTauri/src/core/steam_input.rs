@@ -223,8 +223,8 @@ impl SteamInput {
     // 输入入口（由手柄读取源调用）
     // -----------------------------------------------------------------
 
-    /// 按钮按下/松开事件；SwitchLayer 动作在此处理（按住激活/松开回退），
-    /// 其余动作通过返回值交给映射器执行。
+    /// 按钮按下/松开事件；SwitchLayer / SwitchLayerAndKey 动作在此处理
+    /// （按住激活/松开回退；后者额外把组合键交给映射器注入），其余动作通过返回值交给映射器执行。
     pub fn handle_button_event(&mut self, button: ControllerButton, is_pressed: bool) -> ButtonDispatch { // 按钮事件入口
         if is_pressed { // 按下事件
             self.held_buttons.insert(button); // 记录到按持集合
@@ -257,7 +257,9 @@ impl SteamInput {
         }; // 【Rust 语法】let-else 结束：此语句之后 mapping / layer_id 已绑定
 
         // 切换层动作由引擎处理：按住激活目标层并记录触发按钮
-        if mapping.action.r#type == ActionType::SwitchLayer { // 【Rust 语法】r#type 原始标识符访问字段（type 是关键字）；== 比较枚举值
+        // 切层+按键动作：引擎先激活目标层，再把组合键交给映射器注入（松开时由外层按已注入状态释放）
+        let combo_key = mapping.action.r#type == ActionType::SwitchLayerAndKey; // 是否为「切层+按键」
+        if mapping.action.r#type == ActionType::SwitchLayer || combo_key { // 【Rust 语法】r#type 原始标识符访问字段（type 是关键字）；== 比较枚举值
             if is_pressed { // 仅在按下时激活层
                 let target = mapping.action.layer_name.clone().unwrap_or_default(); // 【Rust 语法】Option::unwrap_or_default()：
                 // Some 取内部值，None 取该类型默认值（String 默认空串）。
@@ -280,8 +282,15 @@ impl SteamInput {
                     } // 未激活分支结束
                 } // 有目标分支结束
             } // 按下分支结束
+            if combo_key { // 切层+按键：层已激活，把按键注入交给映射器
+                return ButtonDispatch::Execute { // 返回执行事件（按下时注入组合键，松开时按状态释放）
+                    is_pressed, // 字段简写
+                    mapping, // 把映射交给映射器
+                    layer_id, // 映射命中层 id
+                }; // Execute 变体构造结束
+            } // combo_key 分支结束
             return ButtonDispatch::None; // 切换层动作不交给映射器执行注入
-        } // SwitchLayer 分支结束
+        } // SwitchLayer / SwitchLayerAndKey 分支结束
 
         // 切换类动作：仅在按下时触发，松开忽略
         if is_pressed { // 仅按下时处理切换类动作

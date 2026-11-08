@@ -38,6 +38,8 @@ const K_TYPE_MOUSE_TOGGLE: &str = "mouseToggle";
 const K_TYPE_WHEEL_UP: &str = "wheelUp";
 const K_TYPE_WHEEL_DOWN: &str = "wheelDown";
 const K_TYPE_SWITCH_LAYER: &str = "switchLayer";
+// 切层+按键：按住激活目标层并发送组合键，松开回退
+const K_TYPE_SWITCH_LAYER_AND_KEY: &str = "switchLayerAndKey";
 const K_TYPE_MOUSE_MOVE: &str = "mouseMove";
 const K_TYPE_LOOK_AROUND: &str = "lookAround";
 const K_TYPE_TOGGLE_MAPPING: &str = "toggleMapping";
@@ -404,6 +406,12 @@ fn action_to_json(action: &MappedAction) -> Value {
         ActionType::WheelDown => json!({ "type": K_TYPE_WHEEL_DOWN }),
         // 【Rust 语法】`.clone().unwrap_or_default()`：layer_name 是 Option<String>，先 clone 副本再解包，None 时用默认空字符串。
         ActionType::SwitchLayer => json!({ "type": K_TYPE_SWITCH_LAYER, "layerName": action.layer_name.clone().unwrap_or_default() }),
+        // 切层+按键：同时写出目标层与要按下的主键（组合键在 subCommands 中）
+        ActionType::SwitchLayerAndKey => json!({
+            "type": K_TYPE_SWITCH_LAYER_AND_KEY,
+            "layerName": action.layer_name.clone().unwrap_or_default(),
+            "keyCode": action.key_code,
+        }),
         // 鼠标移动：只输出 type。
         ActionType::MouseMove => json!({ "type": K_TYPE_MOUSE_MOVE }),
         // 视角环绕：只输出 type。
@@ -457,6 +465,15 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
                 return None;
             }
             Some(MappedAction::switch_layer(name))
+        }
+        K_TYPE_SWITCH_LAYER_AND_KEY => {
+            // 层名为空则解析失败（与切层动作一致）
+            let name = obj.get("layerName").and_then(|v| v.as_str()).unwrap_or("");
+            if name.is_empty() {
+                return None;
+            }
+            let code = obj.get("keyCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            Some(MappedAction::switch_layer_and_key(name, code))
         }
         K_TYPE_MOUSE_MOVE => Some(MappedAction::mouse_move()),
         K_TYPE_LOOK_AROUND => Some(MappedAction::look_around()),

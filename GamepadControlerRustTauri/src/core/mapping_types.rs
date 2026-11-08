@@ -32,6 +32,7 @@ pub enum ActionType {
     KeyboardKey, // 键盘按键动作
     MouseClick, // 鼠标单击动作
     SwitchLayer, // 切换操作层动作
+    SwitchLayerAndKey, // 切层并按下按键的动作（按住时激活目标层 + 发送组合键，松开时释放）
     MouseMove, // 鼠标移动动作
     LookAround, // 视角控制动作（右摇杆）
     MouseToggle, // 鼠标长按锁存动作
@@ -149,6 +150,16 @@ impl MappedAction {
             layer_name: Some(name.to_string()), // 【Rust 语法】Some(...) 将值包装成 Option 的"有值"形态；to_string() 把 &str 借用字符串复制为拥有的 String
         } // 结束 Self 结构体字面量
     } // 结束 switch_layer 函数
+    /// 构造"切层+按键"动作：name 为目标层名，code 为同时按下的主键
+    /// （组合键的修饰键仍由 KeyMapping.sub_commands 提供）
+    pub fn switch_layer_and_key(name: &str, code: i32) -> Self {
+        Self {
+            r#type: ActionType::SwitchLayerAndKey, // 动作类型设为切层+按键
+            key_code: code, // 同时注入的主键键码
+            mouse_button: MouseButton::Left, // 不使用鼠标键
+            layer_name: Some(name.to_string()), // 目标层名
+        }
+    }
     pub fn mouse_move() -> Self { // 构造"鼠标移动"动作
         Self { // 构造 MouseMove 动作实例
             r#type: ActionType::MouseMove, // 动作类型设为鼠标移动
@@ -342,6 +353,10 @@ impl KeyMapping {
             ActionType::WheelUp => parts.push("滚轮上滚".to_string()), // 滚轮上滚描述
             ActionType::WheelDown => parts.push("滚轮下滚".to_string()), // 滚轮下滚描述
             ActionType::SwitchLayer => parts.push(format!("切换→{}", self.action.layer_name.as_deref().unwrap_or(""))), // 切换层：追加"切换→层名"（层名为空时显示空串）
+            ActionType::SwitchLayerAndKey => { // 切层+按键：层名与主键分两段，子命令随后用 + 连接
+                parts.push(format!("切层+按键→{}:", self.action.layer_name.as_deref().unwrap_or("")));
+                parts.push(key_code_to_name(self.action.key_code));
+            }
             ActionType::MouseMove => parts.push("鼠标移动".to_string()), // 鼠标移动描述
             ActionType::LookAround => parts.push("视角控制".to_string()), // 视角控制描述
             ActionType::ToggleMapping => parts.push("切换映射".to_string()), // 切换映射描述

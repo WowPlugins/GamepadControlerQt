@@ -71,6 +71,7 @@ const KINDS = [
   ['wheelup', '滚轮上'], // 鼠标滚轮上滚
   ['wheeldown', '滚轮下'], // 鼠标滚轮下滚
   ['switchlayer', '切层'], // 切换层
+  ['switchlayerandkey', '切层+按键'], // 切层同时按下组合键（松开一并释放）
   ['lookaround', '视角控制'], // 右摇杆视角控制
   ['mousemove', '鼠标移动'], // 鼠标移动
   ['interactionkey', '交互键'], // 交互键：临时解锁锁存，屏幕中央左右键各点一次
@@ -91,7 +92,7 @@ const STATE_OPTIONS = [
 ];
 
 // LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理，未设置无长按，均不能作为长按动作）
-const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'none' && k !== 'statemacro');
+const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'switchlayerandkey' && k !== 'none' && k !== 'statemacro');
 
 // MOUSE_BUTTONS：可映射的鼠标按键列表，[枚举名, 中文显示名]
 const MOUSE_BUTTONS = [
@@ -243,8 +244,8 @@ function renderEdit(info, map) {
   // 目标区
   $('edit-target').innerHTML = targetHTML(info, editKind, map); // 按动作类型渲染目标选择区
 
-  // 子命令（键盘/滚轮动作提供组合键；其余动作类型不提供）
-  const showSubs = editKind === 'keyboard' || editKind === 'wheelup' || editKind === 'wheeldown' || editKind === 'statemacro'; // 是否显示子命令区（键盘/滚轮/状态宏支持组合键）
+  // 子命令（键盘/滚轮/切层+按键动作提供组合键；其余动作类型不提供）
+  const showSubs = editKind === 'keyboard' || editKind === 'wheelup' || editKind === 'wheeldown' || editKind === 'statemacro' || editKind === 'switchlayerandkey'; // 是否显示子命令区（键盘/滚轮/状态宏/切层+按键支持组合键）
   $('edit-subs').style.display = showSubs ? '' : 'none'; // 隐藏/显示子命令 chips 容器
   $('edit-subs-label').style.display = showSubs ? '' : 'none'; // 隐藏/显示子命令标题
   if (showSubs) { // 仅键盘动作渲染子命令
@@ -363,6 +364,23 @@ function targetHTML(info, kind, act, isLong) {
         'onclick="App.set' + preset + 'Layer(' + q(t.name) + ')">' + esc(t.display) + '</div>' // 点击设置切层映射
       ).join('') + '</div>';
   }
+  if (kind === 'switchlayerandkey') { // 切层+按键 → 先选目标层，再选按住时要按下的键
+    if (!info.switch_targets.length) { // 没有可切换的操作层时无法配置
+      return '<div class="faint">请先创建操作层，再配置「切层+按键」</div>';
+    }
+    const curLayer = a.layer_name || info.switch_targets[0].name; // 未选层时默认第一个目标层
+    const curKey = a.key_code || 0; // 未选按键时为 0（只切层不按键）
+    return '<div class="dim">选择目标层</div><div class="chips-row">' +
+      info.switch_targets.map((t) => // 遍历可切换的目标层生成 chip
+        '<div class="chip' + (t.name.toLowerCase() === curLayer.toLowerCase() ? ' active' : '') + '" ' + // 当前目标层加 active 高亮
+        'onclick="App.setCombo(' + q(t.name) + ',' + curKey + ')">' + esc(t.display) + '</div>' // 保留已选按键
+      ).join('') + '</div>' +
+      '<div class="dim">选择按键（按住时切层并按下，松开时一并释放）</div><div class="chips-row">' +
+      COMMON_KEYS.map(([code, label]) => // 遍历按键生成 chip
+        '<div class="chip ' + (code === curKey ? 'active' : '') + '" ' + // 当前按键加 active 高亮
+        'onclick="App.setCombo(' + q(curLayer) + ',' + code + ')">' + label + '</div>' // 保留已选目标层
+      ).join('') + '</div>';
+  }
   if (kind === 'turnaround') { // 快速转身 → 选择方向与幅度（按下即执行一次）
     const px = (a.key_code && a.key_code !== 0) ? a.key_code : 800; // 缺省 800px（约 180°）
     const right = px > 0; // 正数向右，负数向左
@@ -409,6 +427,10 @@ const App = {
   },
   setLayer(name) { // 设置切层映射
     invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'switchlayer', layerName: name, keyCode: null, mouseButton: null }); // 写入目标层映射
+  },
+  setCombo(layer, code) { // 设置切层+按键：同时写入目标层与要按下的主键
+    invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'switchlayerandkey', layerName: layer || null, keyCode: code || null, mouseButton: null });
+    prevEdit = null; // 强制重新渲染
   },
   setMacroKey(code) { // 设置状态宏要发送的主键
     invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: 'statemacro', keyCode: code, mouseButton: null, layerName: null }); // 写入状态宏映射

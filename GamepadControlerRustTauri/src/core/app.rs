@@ -146,6 +146,12 @@ impl AppCore {
                             self.injector.as_ref(),
                             &self.event_tx,
                         );
+                        // 切层+按键：松开激活按钮时同步释放按下时注入的组合键
+                        // （普通切层按钮未注入任何键，该调用无副作用）
+                        self.mapper.release_button_injection(
+                            TriggerId::Pad(button),
+                            self.injector.as_ref(),
+                        );
                         // 层切换时退出精细/快速移动，避免灵敏度残留
                         self.look.set_fine_look(false);
                         self.look.set_fast_look(false);

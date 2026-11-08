@@ -242,6 +242,11 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
             // 【Rust 语法】clone() 复制 String；unwrap_or_default 取 Some 值，None 时返回默认空串
             format!("切换到层: {}", a.layer_name.clone().unwrap_or_default()) // 拼出"切换到层: 名称"
         } // 分支块结束
+        ActionType::SwitchLayerAndKey => format!( // 切层+按键：目标层与按键一起展示
+            "切层+按键: {} → {}",
+            a.layer_name.clone().unwrap_or_default(),
+            key_code_to_name(a.key_code)
+        ),
         ActionType::LookAround => "视角控制（右摇杆）".to_string(), // 视角控制（右摇杆）
         ActionType::MouseMove => "鼠标移动（左摇杆）".to_string(), // 鼠标移动（左摇杆）
         ActionType::InteractionKey => "交互键".to_string(), // 交互键
@@ -264,6 +269,7 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::WheelUp => "wheelup", // 滚轮上
         ActionType::WheelDown => "wheeldown", // 滚轮下
         ActionType::SwitchLayer => "switchlayer", // 切换层
+        ActionType::SwitchLayerAndKey => "switchlayerandkey", // 切层+按键
         ActionType::LookAround => "lookaround", // 视角控制
         ActionType::MouseMove => "mousemove", // 鼠标移动
         ActionType::InteractionKey => "interactionkey", // 交互键
@@ -299,6 +305,9 @@ fn build_action(
         "wheelup" => Some(MappedAction::wheel_up()), // 滚轮上
         "wheeldown" => Some(MappedAction::wheel_down()), // 滚轮下
         "switchlayer" => layer_name.map(|n| MappedAction::switch_layer(&n)), // 切换层
+        // 切层+按键：需要目标层；按键可后选（0 表示只切层不按键）
+        "switchlayerandkey" => layer_name
+            .map(|n| MappedAction::switch_layer_and_key(&n, key_code.unwrap_or(0))),
         "lookaround" => Some(MappedAction::look_around()), // 视角控制
         "mousemove" => Some(MappedAction::mouse_move()), // 鼠标移动
         "interactionkey" => Some(MappedAction::interaction_key()), // 交互键（需求1）
@@ -975,7 +984,10 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
     // （steam_input.rs 先按 id 再按 name 解析 layerName），故命中层 id 或 name 均算
     let trigger_button = find_layer_ref(&core.steam.profile, "Common")
         .and_then(|l| l.button_mappings.iter().find(|(_, m)| {
-            m.action.r#type == ActionType::SwitchLayer
+            matches!( // 切层或切层+按键都可作为激活按钮
+                m.action.r#type,
+                ActionType::SwitchLayer | ActionType::SwitchLayerAndKey
+            )
                 && matches!(
                     m.action.layer_name.as_deref(),
                     Some(n) if n == layer.id || n == layer.name
@@ -1331,7 +1343,10 @@ pub fn change_layer_trigger_button(state: State<'_, AppState>, layer_id: String,
         }; // let-else 结束
         // 【Rust 语法】HashMap::retain(闭包)：闭包返回 true 的项保留，false 的项移除；此处移除指向本层的切层映射
         common.button_mappings.retain(|_, m| {
-            !(m.action.r#type == ActionType::SwitchLayer // 动作是「切层」
+            !(matches!( // 动作是「切层」或「切层+按键」
+                m.action.r#type,
+                ActionType::SwitchLayer | ActionType::SwitchLayerAndKey
+            )
                 && matches!( // 且目标层就是本层（id 或名称命中）
                     m.action.layer_name.as_deref(),
                     Some(n) if n == layer_id.as_str() || n == target_name.as_str()
