@@ -89,6 +89,29 @@ fn main() { // 程序主入口
         shared.sync_state_config();
     } // 作用域块结束
 
+    // ---- 1.5 自动保存线程：配置一旦被编辑（profile_rev 变化）即自动落盘 ----
+    { // 独立作用域：克隆共享状态，线程长期持有
+        let shared_watch = Arc::clone(&shared); // 克隆 Arc 引用给后台线程
+        std::thread::spawn(move || { // 启动常驻后台线程（随进程退出而结束）
+            let mut last_rev = 0u64; // 上次已保存的配置版本号（0 = 启动后尚未保存过）
+            loop { // 无限循环
+                std::thread::sleep(std::time::Duration::from_millis(500)); // 每 0.5 秒检查一次，兼顾实时性与写盘频率
+                let profile = { // 取配置快照的块表达式（锁离开块即释放）
+                    let core = match shared_watch.core.lock() { // 尝试加锁
+                        Ok(c) => c, // 正常取到锁
+                        Err(e) => e.into_inner(), // 锁中毒时仍取出内部数据继续
+                    }; // match 结束
+                    if core.profile_rev == last_rev { // 版本号未变化说明没有编辑
+                        continue; // 跳过本次，避免无意义的序列化与写盘
+                    } // if 结束
+                    last_rev = core.profile_rev; // 记录已处理的版本号
+                    core.steam.profile.clone() // 复制配置快照（锁在块结束时释放）
+                }; // 块表达式结束
+                core::config_manager::save(&profile); // 自动保存到配置文件
+            } // loop 结束
+        }); // spawn 结束
+    } // 作用域块结束
+
     // ---- 2. 启动 Tauri ----
     // 【Rust 语法】方法链：Builder::default() 构造默认构建器，后续逐方法配置
     tauri::Builder::default() // 创建 Tauri 应用构建器

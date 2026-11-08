@@ -16,6 +16,8 @@ use crate::core::config;
 use crate::core::mapping_types::ControllerProfile;
 // 【Rust 语法】use 语句：从标准库 std::path 导入 PathBuf 类型（跨平台文件路径）
 use std::path::PathBuf;
+// 【Rust 语法】use 语句：导入 Mutex（互斥锁），用于串行化配置文件写入
+use std::sync::Mutex;
 
 // 【Rust 语法】const 定义编译期常量；&str 是不可变的字符串切片类型（只读借用），此处存放配置文件名
 const CONFIG_FILE_NAME: &str = "steamlike_config.json";
@@ -54,6 +56,9 @@ pub fn load() -> ControllerProfile { // 【Rust 语法】返回类型为 Control
 
 /// 保存配置到文件，成功返回 true
 pub fn save(profile: &ControllerProfile) -> bool { // 【Rust 语法】参数 profile: &ControllerProfile 为不可变借用，不拥有数据
+    // 写入锁：自动保存线程与退出保存可能同时写文件，串行化避免内容交错损坏
+    static SAVE_LOCK: Mutex<()> = Mutex::new(()); // 【Rust 语法】函数内 static：全局只初始化一次
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner()); // 锁中毒时也继续（取出内部值）
     let text = config::profile_to_json_string(profile); // 把配置对象序列化成 JSON 字符串
     std::fs::write(config_file_path(), text).is_ok() // 写入文件；Result::is_ok() 判断是否成功并作为返回值
 }

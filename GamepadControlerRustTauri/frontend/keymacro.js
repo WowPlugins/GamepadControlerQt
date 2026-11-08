@@ -323,7 +323,13 @@ const App = {
   setKind(k) { // 切换动作类型
     const rule = selectedRule();
     if (!rule) return;
-    invoke('set_keyboard_rule_action', { id: rule.id, kind: k, keyCode: null, mouseButton: null })
+    // 需要二次选择目标的类型先用「沿用当前值 / 默认值」落库，
+    // 否则只改了前端高亮，切到别的规则再回来会回退成旧类型
+    let keyCode = null; // 键盘类要发送的键码
+    let mouseButton = null; // 鼠标类要按下的键
+    if (k === 'keyboard' || k === 'statemacro') keyCode = rule.actionKeyCode || 62; // 键盘/状态宏：沿用当前键码，无则空格
+    else if (k === 'mouse' || k === 'mousetoggle') mouseButton = rule.mouseButton || 'LEFT'; // 鼠标类：沿用当前鼠标键，无则左键
+    invoke('set_keyboard_rule_action', { id: rule.id, kind: k, keyCode, mouseButton })
       .catch((e) => console.error('set_keyboard_rule_action:', e));
   },
   setKey(code) { // 设置动作目标键

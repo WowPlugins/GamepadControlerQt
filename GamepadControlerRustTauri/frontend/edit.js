@@ -140,6 +140,11 @@ let renameLayerId = null; // 当前重命名的操作集 id
 let renameLayerValue = ''; // 当前重命名的名称值
 let currentConds = []; // 当前按键的状态条件 [{stateId, expected}]
 let currentLogic = 'or'; // 状态条件组合方式（or / and）
+let currentKeyCode = 0; // 当前按键已配置的键码（切换动作类型时沿用，避免回退成旧类型）
+let currentMouse = 'LEFT'; // 当前按键已配置的鼠标键（切换动作类型时沿用）
+let currentTargets = []; // 当前操作集可切换的目标层（点击「切层」时落到第一个）
+let currentLongKeyCode = 0; // 长按动作已配置的键码（切换长按类型时沿用）
+let currentLongMouse = 'LEFT'; // 长按动作已配置的鼠标键（切换长按类型时沿用）
 
 // 同步当前选中按键的映射类型。
 // 首次打开编辑页时 editKind 只是初始值「未设置」，必须显式拉一次，
@@ -203,6 +208,9 @@ setInterval(tick, 50); // 每 50ms 轮询一次
 // 渲染
 // ---------------------------------------------------------------------
 function renderEdit(info, map) {
+  currentKeyCode = map.key_code || 0; // 记录当前键码，供切换动作类型时沿用
+  currentMouse = map.mouse_button || 'LEFT'; // 记录当前鼠标键
+  currentTargets = info.switch_targets || []; // 记录可切换的目标层
   const btnDisplay = (info.buttons.find((b) => b.name === selectedButton) || {}).display || selectedButton; // 当前选中按键的显示名
   $('edit-title').textContent = '编辑层: ' + info.layer_name; // 标题显示层名
   $('edit-current').textContent = '当前: ' + btnDisplay + ' (' + map.desc + ')'; // 显示当前按键与其映射描述
@@ -325,6 +333,8 @@ function renderLongPress(info, map) {
   }
 
   currentLongPressMs = map.long_press_ms || 500; // 记录当前阈值，供加减按钮计算
+  currentLongKeyCode = (lp && lp.key_code) || 0; // 记录长按动作键码（切换长按类型时沿用）
+  currentLongMouse = (lp && lp.mouse_button) || 'LEFT'; // 记录长按鼠标键（切换长按类型时沿用）
   $('edit-long-ms').textContent = currentLongPressMs + 'ms'; // 显示长按阈值
 }
 
@@ -416,6 +426,18 @@ const App = {
       invoke('clear_mapping', { layerId: editLayerId, button: selectedButton });
     } else if (NO_TARGET_KINDS.includes(k)) { // 若该类型无需额外目标则直接生效
       invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: null }); // 直接写入映射
+    } else if (k === 'keyboard' || k === 'statemacro') { // 键盘/状态宏：需要选键，先沿用已有键码（无则空格）落库
+      // 不立即落库的话，切到别的按键再切回来会重新读回旧类型，表现为「改了类型却没保存」
+      invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: currentKeyCode || 62, mouseButton: null, layerName: null });
+    } else if (k === 'mouse' || k === 'mousetoggle') { // 鼠标类：先沿用已有鼠标键（无则左键）落库
+      invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: currentMouse || 'LEFT', layerName: null });
+    } else if (k === 'switchlayer' || k === 'switchlayerandkey') { // 切层类：先落到第一个目标层（没有目标层则无法落库）
+      const t = currentTargets[0]; // 取第一个可切换的目标层
+      if (t) { // 有目标层才写入
+        invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: k === 'switchlayerandkey' ? currentKeyCode : null, mouseButton: null, layerName: t.name });
+      }
+    } else if (k === 'turnaround') { // 快速转身：先落默认幅度（向右 180°），再点方向调整
+      invoke('set_mapping', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: 800, mouseButton: null, layerName: null });
     }
     prevEdit = null; // 强制下一轮重新渲染
   },
@@ -457,7 +479,10 @@ const App = {
     prevEdit = null; // 强制重新渲染
   },
   clearMapping() { // 清除当前按键映射
+    editKind = 'none'; // 同步本地类型为未设置，避免界面仍停留在旧类型
+    editLongKind = null; // 主动作被清除，长按动作一并消失
     invoke('clear_mapping', { layerId: editLayerId, button: selectedButton });
+    prevEdit = null; // 强制重新渲染
   },
   toggleSub(code) { // 切换子命令（追加/移除）
     invoke('toggle_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
@@ -467,6 +492,17 @@ const App = {
     editLongKind = k; // 更新长按类型
     if (NO_TARGET_KINDS.includes(k)) { // 无需额外目标则直接写入
       invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: null });
+    } else if (k === 'keyboard') { // 键盘：先沿用已有键码（无则空格）落库，避免切换按键后回退成旧类型
+      invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: currentLongKeyCode || 62, mouseButton: null, layerName: null });
+    } else if (k === 'mouse' || k === 'mousetoggle') { // 鼠标类：先沿用已有鼠标键（无则左键）落库
+      invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: currentLongMouse || 'LEFT', layerName: null });
+    } else if (k === 'switchlayer') { // 切层：先落到第一个目标层
+      const t = currentTargets[0]; // 取第一个可切换的目标层
+      if (t) { // 有目标层才写入
+        invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: t.name });
+      }
+    } else if (k === 'turnaround') { // 快速转身：先落默认幅度（向右 180°）
+      invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: 800, mouseButton: null, layerName: null });
     }
     prevEdit = null; // 强制重新渲染
   },
