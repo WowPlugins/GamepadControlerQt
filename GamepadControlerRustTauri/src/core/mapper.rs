@@ -260,6 +260,24 @@ impl MapperState {
         self.smoothed_look_y = 0.0; // 复位平滑 Y
     } // 结束 release_all_inputs 函数
 
+    /// 该键是否仍被「其它触发源」的映射按住。
+    /// 典型场景：一个键映射成单独的「按住 Ctrl」，另一个键映射成「Ctrl+1」。
+    /// 组合键松开时若直接把 Ctrl 抬起，就会把前一个映射仍需要的修饰键提前松开，
+    /// 游戏侧表现就是「按住 Ctrl 不放，按一下数字键后 Ctrl 状态消失」。
+    // 【Rust 语法】`&self` 只读借用；迭代器 `any` 遇到第一个满足条件的元素即返回 true。
+    fn key_held_by_other(&self, button: TriggerId, code: i32) -> bool {
+        self.pressed_main_keys.iter().any(|(b, k)| *b != button && *k == code) // 其它触发源的主键
+            || self.pressed_sub_keys.iter().any(|(b, subs)| *b != button && subs.contains(&code)) // 其它触发源的子命令
+    } // 结束 key_held_by_other 函数
+
+    /// 释放一个已注入的键：仍被其它映射按住时只让出本次引用，不真正抬起。
+    fn release_key_if_unused(&self, button: TriggerId, code: i32, injector: &InputInjector) {
+        if self.key_held_by_other(button, code) { // 还有别的映射按着这个键
+            return; // 保持按下，等最后那个映射松开时再抬起
+        } // 结束 if 判断
+        injector.force_key_up(code); // 强制抬起：按下记录可能已被触发通道消耗
+    } // 结束 release_key_if_unused 函数
+
     /// 按「已注入状态」释放某按钮的全部注入（子命令逆序 -> 主键 -> 鼠标）。
     /// 注意：不处理 MouseToggle 锁存（toggle 由用户主动锁存，松开不改变状态）。
     // 【Rust 语法】方法：`&mut self` 可变借用（需要从记录中移除条目）。
@@ -271,21 +289,21 @@ impl MapperState {
             // 【Rust 语法】`subs.iter().rev()`：反向迭代引用；`sub` 为元素引用 &i32，`*sub` 解引用取 i32 值。
             for sub in subs.iter().rev() { // 非修饰子命令先释放
                 if !is_modifier_key(*sub) { // 非修饰键
-                    injector.force_key_up(*sub); // 强制抬起：按下记录可能已被触发通道消耗
+                    self.release_key_if_unused(button, *sub, injector); // 其它映射仍按着则不抬起
                 } // 结束 if 判断
             } // 结束 for 循环
             // 释放主键
             if let Some(main) = self.pressed_main_keys.remove(&button) {
-                injector.force_key_up(main); // 强制抬起主键
+                self.release_key_if_unused(button, main, injector); // 其它映射仍按着则不抬起
             } // 结束 if let 分支
             // 修饰子命令最后释放
             for sub in subs.iter().rev() { // 修饰键最后释放
                 if is_modifier_key(*sub) { // 修饰键
-                    injector.force_key_up(*sub); // 强制抬起：按下记录可能已被触发通道消耗
+                    self.release_key_if_unused(button, *sub, injector); // 其它映射仍按着则不抬起
                 } // 结束 if 判断
             } // 结束 for 循环
         } else if let Some(main) = self.pressed_main_keys.remove(&button) { // 无子命令时直接释放主键
-            injector.force_key_up(main); // 强制抬起主键
+            self.release_key_if_unused(button, main, injector); // 其它映射仍按着则不抬起
         } // 结束 if let 分支
         // 释放鼠标（不处理长按保持的）
         if let Some(mb) = self.pressed_mouse_buttons.remove(&button) {
