@@ -504,6 +504,8 @@ fn mapping_to_json(mapping: &KeyMapping) -> Value {
     json!({
         "action": action_to_json(&mapping.action),
         "subCommands": mapping.sub_commands,
+        // 切层保持开关（仅点击子命令参与；缺省 true 兼容旧配置）
+        "subOnLayerHold": mapping.sub_on_layer_hold,
         // 长按动作（None 时输出 null，保持文件可读）
         "longPress": mapping.long_press.as_ref().map(|a| action_to_json(a)),
         "longPressSubCommands": mapping.long_press_subs,
@@ -583,9 +585,15 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         obj.get("stateLogic").and_then(|x| x.as_str()).unwrap_or("or"),
     );
     // 【Rust 语法】结构体字面量：`action` 是字段名简写——等价于 `action: action`，即变量名与字段名相同可省略冒号部分。
+    // 切层保持开关：缺省 true（旧配置默认切层+子命令一起触发）
+    let sub_on_layer_hold = obj
+        .get("subOnLayerHold")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     Some(KeyMapping {
         action,
         sub_commands: subs,
+        sub_on_layer_hold,
         long_press,
         long_press_subs: long_subs,
         long_press_ms,

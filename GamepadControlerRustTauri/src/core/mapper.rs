@@ -163,6 +163,9 @@ pub struct MapperState {
     pub pressed_main_keys: HashMap<TriggerId, i32>, // 当前按下的主键记录（触发源 -> 键码）
     /// 触发源 -> 已按下的子命令
     pub pressed_sub_keys: HashMap<TriggerId, Vec<i32>>, // 已按下的组合键子命令记录
+    /// 切层保持的修饰键：层 id -> 因「切层+子命令一起触发」而按下保持的修饰键
+    /// （按住切层键期间保持，松开切层键时抬起；仅收集 sub_on_layer_hold 为 true 的点击子命令）
+    pub layer_held_mods: HashMap<String, Vec<i32>>,
     /// 触发源 -> 鼠标键
     pub pressed_mouse_buttons: HashMap<TriggerId, MouseButton>, // 当前按下的鼠标键记录
     /// 触发源 -> 鼠标单击来源层 id（需求6：释放层时只释放该层内产生的鼠标锁存）
@@ -197,7 +200,8 @@ pub struct MapperState {
 /// 判断是否为修饰键（Alt/Ctrl/Shift）：
 /// 组合键注入/释放时修饰键必须「最先按下、最后释放」，否则游戏识别不到组合键。
 // 【Rust 语法】模块级私有函数（不在 impl 内，属于模块顶层）；matches! 宏判断 code 是否命中任一修饰键键码。
-fn is_modifier_key(code: i32) -> bool {
+// pub(crate)：steam_input.rs 收集切层保持子命令时同样只收集修饰键，故对 crate 内可见。
+pub(crate) fn is_modifier_key(code: i32) -> bool {
     matches!(
         code, // 待判断的键码
         android_key::ALT_LEFT // 左 Alt
@@ -240,6 +244,7 @@ impl MapperState {
         self.auto_locked_right = false; // 清除自动锁定标记
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
+        self.layer_held_mods.clear(); // 清空切层保持的修饰键记录（注入器已统一松开）
         // 直发通道（PostMessage）按下的 WASD 不在注入器记录里，需单独抬起，避免游戏里卡键
         if self.stick_keys_via_post && self.wow_hwnd != 0 {
             for kc in self.left_stick_pressed_keys.iter().copied() {
@@ -268,7 +273,57 @@ impl MapperState {
     fn key_held_by_other(&self, button: TriggerId, code: i32) -> bool {
         self.pressed_main_keys.iter().any(|(b, k)| *b != button && *k == code) // 其它触发源的主键
             || self.pressed_sub_keys.iter().any(|(b, subs)| *b != button && subs.contains(&code)) // 其它触发源的子命令
+            || self.layer_held_mods.values().any(|mods| mods.contains(&code)) // 切层保持的修饰键（松开按键时不应抬起层保持的修饰键）
     } // 结束 key_held_by_other 函数
+
+    /// 当前所有激活层保持的修饰键并集（去重）
+    fn layer_held_mods_union(&self) -> Vec<i32> {
+        let mut union: Vec<i32> = Vec::new();
+        for mods in self.layer_held_mods.values() {
+            for m in mods {
+                if !union.contains(m) {
+                    union.push(*m);
+                }
+            }
+        }
+        union
+    } // 结束 layer_held_mods_union 函数
+
+    /// 切层激活：把该层「切层保持开关 ON」的按键修饰子命令按下并保持（层 id -> 修饰键列表）。
+    /// 已被其它层按住的同一修饰键不重复按下，但本层记录仍包含它（本层停用时不误抬）。
+    pub fn press_layer_mods(
+        &mut self,
+        layer_id: &str,
+        mods: &[i32],
+        injector: &InputInjector,
+    ) {
+        if mods.is_empty() {
+            return;
+        }
+        let mut held = self.layer_held_mods_union();
+        let entry = self.layer_held_mods.entry(layer_id.to_string()).or_default();
+        for &m in mods {
+            if !held.contains(&m) {
+                injector.send_key_down(m); // 首次被保持：按下修饰键
+                held.push(m);
+            }
+            if !entry.contains(&m) {
+                entry.push(m); // 记录本层依赖该修饰键
+            }
+        }
+    } // 结束 press_layer_mods 函数
+
+    /// 切层停用：抬起该层保持的修饰键（仍被其它层保持的不抬）。
+    pub fn release_layer_mods(&mut self, layer_id: &str, injector: &InputInjector) {
+        if let Some(mods) = self.layer_held_mods.remove(layer_id) {
+            for &m in mods.iter().rev() {
+                if self.layer_held_mods.values().any(|v| v.contains(&m)) {
+                    continue; // 其它层还在用，保持按下
+                }
+                injector.force_key_up(m); // 强制抬起：按下记录可能已被触发通道消耗
+            }
+        }
+    } // 结束 release_layer_mods 函数
 
     /// 释放一个已注入的键：仍被其它映射按住时只让出本次引用，不真正抬起。
     fn release_key_if_unused(&self, button: TriggerId, code: i32, injector: &InputInjector) {
@@ -482,19 +537,35 @@ impl MapperState {
             } // 结束 if 判断
             valid_subs.push(subs[i]); // 收集有效的子命令键码
         } // 结束 for 循环
-        // ① 修饰子命令最先按下（Alt/Ctrl/Shift 优先于主键）
+        // ① 层保持修饰键掩蔽：切层按住的修饰键中「本映射不需要」的先抬起，
+        // 注入完成后再按回去，保证本键点击不被层保持修饰键污染
+        // （如 LB 按住保持 Ctrl 时按 B=3，游戏应收到 3 而不是 Ctrl+3）。
+        let held = self.layer_held_mods_union();
+        let to_mask: Vec<i32> = held
+            .iter()
+            .copied()
+            .filter(|m| !valid_subs.contains(m) && *m != main_key_code)
+            .collect();
+        for &m in &to_mask {
+            injector.force_key_up(m); // 临时抬起层保持修饰键
+        }
+        // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于主键；已被层按住的跳过，避免重复按下）
         for &sub in &valid_subs { // 遍历修饰子命令
-            if is_modifier_key(sub) { // 是修饰键
+            if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
                 injector.send_key_down(sub); // 最先按下（形成组合键的修饰部分）
             } // 结束 if 判断
         } // 结束 for 循环
-        injector.send_key_down(main_key_code); // ② 再按下主键（若主键本身是修饰键，此时修饰键也已排在最前）
-        // ③ 非修饰子命令最后按下
+        injector.send_key_down(main_key_code); // ③ 再按下主键（若主键本身是修饰键，此时修饰键也已排在最前）
+        // ④ 非修饰子命令最后按下
         for &sub in &valid_subs { // 遍历非修饰子命令
             if !is_modifier_key(sub) { // 非修饰键
                 injector.send_key_down(sub); // 最后按下
             } // 结束 if 判断
         } // 结束 for 循环
+        // ⑤ 恢复被临时抬起的层保持修饰键（继续按住直到松开切层键）
+        for &m in &to_mask {
+            injector.send_key_down(m); // 按回去
+        }
         self.pressed_main_keys.insert(button, main_key_code); // 记录主键已按下
         self.pressed_sub_keys.insert(button, valid_subs); // 记录子命令已按下
     } // 结束 handle_keyboard_key 函数
@@ -517,19 +588,33 @@ impl MapperState {
         let n = subs.len().min(KeyMapping::MAX_SUB_COMMANDS);
         // 【Rust 语法】`subs[..n].to_vec()`：切片取前 n 个元素并复制为 Vec<i32>（子命令键码列表）。
         let valid_subs: Vec<i32> = subs[..n].to_vec(); // 收集子命令键码
-        // ① 修饰子命令最先按下（Alt/Ctrl/Shift 优先于滚轮事件）
+        // ① 层保持修饰键掩蔽（与 handle_keyboard_key 一致：不需要先抬、完成后按回）
+        let held = self.layer_held_mods_union();
+        let to_mask: Vec<i32> = held
+            .iter()
+            .copied()
+            .filter(|m| !valid_subs.contains(m))
+            .collect();
+        for &m in &to_mask {
+            injector.force_key_up(m); // 临时抬起层保持修饰键
+        }
+        // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于滚轮事件；已被层按住的跳过）
         for &sub in &valid_subs { // 遍历修饰子命令
-            if is_modifier_key(sub) { // 是修饰键
+            if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
                 injector.send_key_down(sub); // 最先按下（形成组合键的修饰部分）
             } // 结束 if 判断
         } // 结束 for 循环
-        injector.send_mouse_wheel(dir); // ② 发送滚轮事件（此时修饰键已按下）
-        // ③ 非修饰子命令后按下
+        injector.send_mouse_wheel(dir); // ③ 发送滚轮事件（此时修饰键已按下）
+        // ④ 非修饰子命令后按下
         for &sub in &valid_subs { // 遍历非修饰子命令
             if !is_modifier_key(sub) { // 非修饰键
                 injector.send_key_down(sub); // 后按下
             } // 结束 if 判断
         } // 结束 for 循环
+        // ⑤ 恢复被临时抬起的层保持修饰键
+        for &m in &to_mask {
+            injector.send_key_down(m); // 按回去
+        }
         self.pressed_sub_keys.insert(button, valid_subs); // 记录子命令已按下（松开时自动释放）
     } // 结束 handle_wheel 函数
 

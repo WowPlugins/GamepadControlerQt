@@ -265,6 +265,9 @@ function renderEdit(info, map) {
     $('edit-subs-label').textContent = // 子命令标题，显示当前已选数量
       '子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
   }
+  // 切层保持开关：与子命令区同显隐；缺省视为开（兼容旧配置 subOnLayerHold 未返回的情况）
+  $('edit-layerhold-row').style.display = showSubs ? 'flex' : 'none';
+  $('edit-layerhold').checked = map.subOnLayerHold !== false;
 
   renderStateConditions(map); // 渲染状态条件配置区（需求5）
   renderLongPress(info, map); // 渲染长按动作配置区（需求2）
@@ -486,6 +489,9 @@ const App = {
   },
   toggleSub(code) { // 切换子命令（追加/移除）
     invoke('toggle_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
+  },
+  setSubOnLayerHold(on) { // 切换「切层保持」开关（仅点击子命令参与，不影响长按）
+    invoke('set_sub_on_layer_hold', { layerId: editLayerId, button: selectedButton, on: on });
   },
   // ---- 长按动作（需求2） ----
   setLongKind(k) { // 切换长按动作类型

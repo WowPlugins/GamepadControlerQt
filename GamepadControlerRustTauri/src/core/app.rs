@@ -146,6 +146,11 @@ impl AppCore {
                             self.injector.as_ref(),
                             &self.event_tx,
                         );
+                        // 切层保持：松开切层键时抬起该层按下保持的修饰键
+                        self.mapper.release_layer_mods(
+                            &layer_id,
+                            self.injector.as_ref(),
+                        );
                         // 切层+按键：松开激活按钮时同步释放按下时注入的组合键
                         // （普通切层按钮未注入任何键，该调用无副作用）
                         self.mapper.release_button_injection(
@@ -155,6 +160,15 @@ impl AppCore {
                         // 层切换时退出精细/快速移动，避免灵敏度残留
                         self.look.set_fine_look(false);
                         self.look.set_fast_look(false);
+                    }
+                    // 切层激活：该层「切层保持开关 ON」按键的修饰子命令按下保持
+                    ButtonDispatch::ActivateLayerMods { layer_id, mods } => {
+                        // 按住切层键期间全局按住这些修饰键（松开切层键随层停用抬起）
+                        self.mapper.press_layer_mods(
+                            &layer_id,
+                            &mods,
+                            self.injector.as_ref(),
+                        );
                     }
                     // 开关映射的分发：向外发出 ToggleMappingRequested 事件。
                     ButtonDispatch::ToggleMapping => {
