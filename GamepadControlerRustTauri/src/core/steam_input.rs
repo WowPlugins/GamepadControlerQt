@@ -63,6 +63,8 @@ pub enum ButtonDispatch {
     /// 切层激活新层：该层「切层保持开关 ON」按键的修饰子命令，交给映射器按下保持
     /// （按住切层键期间全局按住这些修饰键，松开切层键时随层停用抬起）
     ActivateLayerMods { layer_id: String, mods: Vec<i32> },
+    /// 松开切层键但层不是本键激活的（按下时层已激活）：只抬起本键按下保持的修饰键，不停用层
+    ReleaseLayerMods { layer_id: String },
     /// 切换映射启停请求（ToggleMapping）
     ToggleMapping, // 切换映射启停请求
     /// 切换屏幕键盘请求（ToggleOnScreenKeyboard）
@@ -82,6 +84,9 @@ pub struct SteamInput {
     active_layers: Vec<String>, // 【Rust 语法】Vec<String> 动态数组（类似 Qt 的 QVector<std::string>）；String 为可变 UTF-8 字符串
     /// 记录「哪个按键激活了哪个层」，松开该按键时停用对应层
     button_triggered_layers: HashMap<ControllerButton, String>, // 【Rust 语法】HashMap<K, V> 键值映射（类似 QHash）
+    /// 切层键按下时「按下保持」的层保持修饰键来源记录：按钮 -> 层 id
+    /// （层可能已被 UI 等激活而非本键激活，松开时需据此单独抬起修饰键）
+    button_layer_mods: HashMap<ControllerButton, String>,
     /// 当前物理按下的手柄按键集合
     held_buttons: HashSet<ControllerButton>, // 手柄按键集合
     /// 当前激活层 id（未激活任何操作层时为 "Common"）
@@ -98,6 +103,7 @@ impl SteamInput {
             event_tx, // 【Rust 语法】字段简写：`event_tx: event_tx` 可省略为 `event_tx`
             active_layers: Vec::new(), // 空激活层栈
             button_triggered_layers: HashMap::new(), // 空触发层记录
+            button_layer_mods: HashMap::new(), // 空层保持修饰键来源记录
             held_buttons: HashSet::new(), // 空按持集合
             active_layer_name: "Common".to_string(), // 【Rust 语法】"..." 是字符串字面量（类型 &str）；
             // .to_string() 方法把 &str 转为拥有所有权的 String。
@@ -259,9 +265,14 @@ impl SteamInput {
         if !is_pressed { // 仅在松开时处理层停用
             if let Some(triggered_id) = self.button_triggered_layers.remove(&button) { // 【Rust 语法】HashMap::remove 返回 Option<V>；
             // if let Some(...) 解包：若该按钮之前激活过某层则取出其 id。
+                self.button_layer_mods.remove(&button); // 层保持修饰键随 DeactivateLayer 一并抬起
                 self.deactivate_layer(&triggered_id); // 停用该按钮激活的层
                 return ButtonDispatch::DeactivateLayer(triggered_id); // 通知映射器释放该层内产生的鼠标左右键锁存（需求6）
             } // 触发层分支结束
+            // 层不是本键激活的（按下时层已激活）但本键按下保持了修饰键：松开只抬起修饰键，不停用层
+            if let Some(held_id) = self.button_layer_mods.remove(&button) {
+                return ButtonDispatch::ReleaseLayerMods { layer_id: held_id };
+            }
         } // 松开分支结束
 
         // 查询当前层栈下的有效映射；无映射则不产生任何事件
@@ -283,7 +294,7 @@ impl SteamInput {
         // 切层+按键动作：引擎先激活目标层，再把组合键交给映射器注入（松开时由外层按已注入状态释放）
         let combo_key = mapping.action.r#type == ActionType::SwitchLayerAndKey; // 是否为「切层+按键」
         if mapping.action.r#type == ActionType::SwitchLayer || combo_key { // 【Rust 语法】r#type 原始标识符访问字段（type 是关键字）；== 比较枚举值
-            let mut newly_activated: Option<String> = None; // 本次按下新激活的层 id（供收集切层保持修饰键）
+            let mut activated_tid: Option<String> = None; // 本次按下解析出的目标层 id（供收集切层保持修饰键，无论层是否新激活）
             if is_pressed { // 仅在按下时激活层
                 let target = mapping.action.layer_name.clone().unwrap_or_default(); // 【Rust 语法】Option::unwrap_or_default()：
                 // Some 取内部值，None 取该类型默认值（String 默认空串）。
@@ -303,8 +314,8 @@ impl SteamInput {
                     if !self.is_layer_active(&tid) { // 目标层尚未激活
                         self.activate_layer(&tid); // 激活目标层
                         self.button_triggered_layers.insert(button, tid.clone()); // 【Rust 语法】HashMap::insert：记录「该按钮 → 激活的层」，松开时据此停用
-                        newly_activated = Some(tid); // 记录本次新激活的层
                     } // 未激活分支结束
+                    activated_tid = Some(tid); // 记录目标层（无论新激活还是此前已被 UI 等激活，都要收集层保持修饰键）
                 } // 有目标分支结束
             } // 按下分支结束
             if combo_key { // 切层+按键：层已激活，把按键注入交给映射器
@@ -314,11 +325,14 @@ impl SteamInput {
                     layer_id, // 映射命中层 id
                 }; // Execute 变体构造结束
             } // combo_key 分支结束
-            // 纯切层：新激活层内「切层保持开关 ON」按键的修饰子命令，交给映射器按下保持
-            // （按住切层键期间全局按住修饰键；松开切层键时随 DeactivateLayer 抬起）。
-            if let Some(tid) = newly_activated {
+            // 纯切层：目标层内「切层保持开关 ON」按键的修饰子命令，交给映射器按下保持
+            // （按住切层键期间全局按住修饰键；松开切层键时随 DeactivateLayer 或 ReleaseLayerMods 抬起）。
+            // 注意：层可能此前已被 UI/其它键激活，此时仍需按下保持，否则出现
+            // 「LB 按住但 Ctrl+Alt 未按住」的现象。
+            if let Some(tid) = activated_tid {
                 let mods = collect_layer_hold_mods(&self.profile, &tid);
                 if !mods.is_empty() {
+                    self.button_layer_mods.insert(button, tid.clone()); // 记录本键按下保持的层，松开时据此抬起
                     return ButtonDispatch::ActivateLayerMods { layer_id: tid, mods };
                 }
             }

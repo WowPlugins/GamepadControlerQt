@@ -170,6 +170,13 @@ impl AppCore {
                             self.injector.as_ref(),
                         );
                     }
+                    // 松开切层键但层不是本键激活的：只抬起本键按下保持的修饰键，不停用层
+                    ButtonDispatch::ReleaseLayerMods { layer_id } => {
+                        self.mapper.release_layer_mods(
+                            &layer_id,
+                            self.injector.as_ref(),
+                        );
+                    }
                     // 开关映射的分发：向外发出 ToggleMappingRequested 事件。
                     ButtonDispatch::ToggleMapping => {
                         self.emit(UiEvent::ToggleMappingRequested);
