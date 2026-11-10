@@ -271,8 +271,13 @@ impl MapperState {
     /// 游戏侧表现就是「按住 Ctrl 不放，按一下数字键后 Ctrl 状态消失」。
     // 【Rust 语法】`&self` 只读借用；迭代器 `any` 遇到第一个满足条件的元素即返回 true。
     fn key_held_by_other(&self, button: TriggerId, code: i32) -> bool {
-        self.pressed_main_keys.iter().any(|(b, k)| *b != button && *k == code) // 其它触发源的主键
-            || self.pressed_sub_keys.iter().any(|(b, subs)| *b != button && subs.contains(&code)) // 其它触发源的子命令
+        // 键盘规则（Kb）动作对同一键的"按住"是本触发源 keydown 被钩子吞掉的产物，
+        // 规则动作的释放必须由本触发源的 keyup 到达钩子配对后才投递。
+        // 若让 Kb 记录挡住这里的抬起注入，钩子收不到 keyup → swallowed 无法配对
+        // → 规则 Release 丢失 → 宏按住的键永不释放（游戏卡键）。
+        let blocks = |b: &TriggerId| *b != button && !matches!(b, TriggerId::Kb(_));
+        self.pressed_main_keys.iter().any(|(b, k)| blocks(b) && *k == code) // 其它触发源的主键
+            || self.pressed_sub_keys.iter().any(|(b, subs)| blocks(b) && subs.contains(&code)) // 其它触发源的子命令
             || self.layer_held_mods.values().any(|mods| mods.contains(&code)) // 切层保持的修饰键（松开按键时不应抬起层保持的修饰键）
     } // 结束 key_held_by_other 函数
 
