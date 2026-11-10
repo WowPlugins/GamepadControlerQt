@@ -14,6 +14,11 @@ const { WebviewWindow } = window.__TAURI__.webviewWindow;
 // 解构出 emit 事件发送函数（用于向编辑窗口广播层 id）
 const { emit } = window.__TAURI__.event;
 
+// 拉取程序版本号显示在标题旁（后端 get_version 返回 Cargo.toml 包版本）
+invoke('get_version').then((v) => {
+  document.getElementById('app-version').textContent = v; // 如 v0.0.79
+});
+
 // ---------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------

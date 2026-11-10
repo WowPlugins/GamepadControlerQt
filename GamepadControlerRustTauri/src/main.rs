@@ -123,6 +123,7 @@ fn main() { // 程序主入口
         // 【Rust 语法】属性宏 tauri::generate_handler!：把命令函数列表编译为前端 invoke 的分发器
         .invoke_handler(tauri::generate_handler![ // 注册所有前端可调用的 IPC 命令
             commands::get_snapshot, // 主窗口整体快照
+            commands::get_version, // 程序版本号
             commands::get_overlay_snapshot, // 悬浮窗快照
             commands::start_mapping, // 开始映射
             commands::stop_mapping, // 停止映射

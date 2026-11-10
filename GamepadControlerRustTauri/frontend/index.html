@@ -10,6 +10,7 @@
   <div id="view-main" class="root"> <!-- 主视图根容器：flex 纵向布局 -->
     <div class="header"> <!-- 顶部标题栏 -->
       <div class="title">Gamepad 键鼠映射</div> <!-- 程序主标题（渐变文字） -->
+      <div class="version" id="app-version"></div> <!-- 程序版本号（由 main.js 从后端 get_version 获取） -->
       <!-- 连接/运行状态胶囊：左侧状态圆点 + 右侧状态文字（由 main.js 每 50ms 刷新） -->
       <div class="status"><span id="status-dot" class="dot off"></span><span id="status-text">手柄未连接</span></div>
     </div>

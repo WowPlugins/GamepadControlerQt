@@ -54,6 +54,9 @@ const FAST_LOOK_SCALE: f32 = 2.5;
 const INTERACTION_CLICK_GAP_MS: u64 = 15;
 /// 解锁鼠标长按后的等待时间（毫秒）：让游戏先处理完抬起事件，再做移动光标/点击等后续操作
 const UNLOCK_SETTLE_MS: u64 = 50;
+// 层保持修饰键掩蔽后的延迟按回时间：WoW 按帧轮询读修饰键状态，
+// 抬起与按回必须在不同帧之间，游戏才能看到「不带修饰」的按下事件。
+const MASK_RESTORE_MS: u64 = 50;
 
 // ---------------------------------------------------------------------
 // LookState —— 右摇杆原子状态（look 线程读取，主线程/手柄线程写入）
@@ -166,6 +169,8 @@ pub struct MapperState {
     /// 切层保持的修饰键：层 id -> 因「切层+子命令一起触发」而按下保持的修饰键
     /// （按住切层键期间保持，松开切层键时抬起；仅收集 sub_on_layer_hold 为 true 的点击子命令）
     pub layer_held_mods: HashMap<String, Vec<i32>>,
+    /// 掩蔽延迟按回队列：被临时抬起的层保持修饰键 -> 按回时刻（tick 到点按回）
+    pub pending_mask_restore: Vec<(i32, Instant)>,
     /// 触发源 -> 鼠标键
     pub pressed_mouse_buttons: HashMap<TriggerId, MouseButton>, // 当前按下的鼠标键记录
     /// 触发源 -> 鼠标单击来源层 id（需求6：释放层时只释放该层内产生的鼠标锁存）
@@ -245,6 +250,7 @@ impl MapperState {
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
         self.layer_held_mods.clear(); // 清空切层保持的修饰键记录（注入器已统一松开）
+        self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
         // 直发通道（PostMessage）按下的 WASD 不在注入器记录里，需单独抬起，避免游戏里卡键
         if self.stick_keys_via_post && self.wow_hwnd != 0 {
             for kc in self.left_stick_pressed_keys.iter().copied() {
@@ -308,6 +314,11 @@ impl MapperState {
         let mut held = self.layer_held_mods_union();
         let entry = self.layer_held_mods.entry(layer_id.to_string()).or_default();
         for &m in mods {
+            // 该键正处掩蔽延迟按回状态（物理已抬起）：取消延迟并立即按回
+            if self.pending_mask_restore.iter().any(|(p, _)| *p == m) {
+                self.pending_mask_restore.retain(|(p, _)| *p != m);
+                injector.send_key_down(m); // 立即按回
+            }
             if !held.contains(&m) {
                 injector.send_key_down(m); // 首次被保持：按下修饰键
                 held.push(m);
@@ -325,10 +336,108 @@ impl MapperState {
                 if self.layer_held_mods.values().any(|v| v.contains(&m)) {
                     continue; // 其它层还在用，保持按下
                 }
+                // 该键不再被保持：取消延迟按回记录，避免之后被错误按回
+                self.pending_mask_restore.retain(|(p, _)| *p != m);
                 injector.force_key_up(m); // 强制抬起：按下记录可能已被触发通道消耗
             }
         }
     } // 结束 release_layer_mods 函数
+
+    /// 掩蔽式鼠标按下：临时抬起层保持修饰键 -> 鼠标按下（修饰键延迟按回，见 mask_lift）。
+    /// 鼠标按下事件不应被切层保持的修饰键污染（如 Shift+右键）。
+    fn masked_mouse_down(&mut self, mb: MouseButton, injector: &InputInjector) {
+        self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
+        injector.send_mouse_down(mb); // 注入鼠标键按下
+    } // 结束 masked_mouse_down 函数
+
+    /// 掩蔽抬起：把「当前注入不需要」的层保持修饰键临时抬起，并登记延迟按回；
+    /// 当前注入需要、但正处于延迟按回状态（物理已抬起）的修饰键则立即按回。
+    /// WoW 按帧轮询读修饰键状态：若抬起后立即按回，游戏在同一帧内仍会读到按住，
+    /// 因此按回交给 flush_mask_restore 在 MASK_RESTORE_MS 后执行。
+    fn mask_lift(&mut self, keep: &[i32], main_key: Option<i32>, injector: &InputInjector) {
+        // 当前注入需要的修饰键若正处延迟按回队列：立即按回（取消延迟）
+        self.pending_mask_restore.retain(|(m, _)| {
+            if keep.contains(m) || main_key == Some(*m) {
+                injector.send_key_down(*m); // 立即按回
+                false // 移出队列
+            } else {
+                true // 保留
+            }
+        });
+        let held = self.layer_held_mods_union();
+        for &m in &held {
+            if keep.contains(&m) || main_key == Some(m) {
+                continue; // 当前注入需要它：保持按下不动
+            }
+            if let Some(pos) = self.pending_mask_restore.iter().position(|(p, _)| *p == m) {
+                // 滑动窗口：已抬起的修饰键把按回时刻顺延（保持抬起直到最后一次动作后一段时间）
+                self.pending_mask_restore[pos].1 =
+                    Instant::now() + Duration::from_millis(MASK_RESTORE_MS);
+                continue; // 已抬起等待延迟按回，不重复操作
+            }
+            injector.force_key_up(m); // 抬起
+            self.pending_mask_restore
+                .push((m, Instant::now() + Duration::from_millis(MASK_RESTORE_MS)));
+        }
+    } // 结束 mask_lift 函数
+
+    /// 是否还有「当前已注入并保持按下」的键鼠（鼠标键、摇杆方向键、键盘主键/子命令）。
+    /// 用于判断掩蔽的修饰键能否按回：按住期间不能按回，否则会被游戏读到。
+    fn has_pressed_injection(&self) -> bool {
+        !self.pressed_mouse_buttons.is_empty() // 有鼠标键按下
+            || !self.toggled_mouse_buttons.is_empty() // 有鼠标锁存
+            || !self.extra_toggled.is_empty() // 有交换产生的鼠标锁存
+            || self.auto_locked_right // WASD 自动锁定右键
+            || !self.left_stick_pressed_keys.is_empty() // 摇杆方向键按下
+            || !self.pressed_main_keys.is_empty() // 键盘主键按下
+            || !self.pressed_sub_keys.is_empty() // 子命令键按下
+    } // 结束 has_pressed_injection 函数
+
+    /// 到点的延迟按回修饰键（每 tick 调用）：仅当该键仍被某层保持时才按回。
+    fn flush_mask_restore(&mut self, injector: &InputInjector) {
+        if self.pending_mask_restore.is_empty() {
+            return; // 无待按回项
+        }
+        // 仍有受掩蔽保护的注入处于按下状态（按住鼠标拖拽、摇杆移动、键按住）：
+        // 继续保持修饰键抬起；否则按回后游戏在「按住期间」会读到修饰键（如 Shift+左键拖拽）。
+        if self.has_pressed_injection() {
+            let t = Instant::now() + Duration::from_millis(MASK_RESTORE_MS);
+            for (_, at) in self.pending_mask_restore.iter_mut() {
+                if *at < t {
+                    *at = t; // 顺延到全部松开之后
+                }
+            }
+            return;
+        }
+        let now = Instant::now();
+        let mut i = 0;
+        while i < self.pending_mask_restore.len() {
+            let (m, at) = self.pending_mask_restore[i];
+            if now >= at { // 到点
+                self.pending_mask_restore.remove(i);
+                if self.layer_held_mods_union().contains(&m) {
+                    injector.send_key_down(m); // 层仍保持：按回
+                } // 层已停用：不按回（release_layer_mods 已抬起）
+            } else {
+                i += 1;
+            }
+        }
+    } // 结束 flush_mask_restore 函数
+
+    /// 滑动掩蔽窗口：键/鼠标「松开」时把待按回修饰键的时刻顺延，
+    /// 保证修饰键在整个按下-松开过程（含 WoW 处理松开事件的延迟）内保持抬起，
+    /// 否则松开/长按轮询时游戏会读到「修饰键+主键」组合（如 Shift+左键）。
+    fn bump_mask_restore(&mut self) {
+        if self.pending_mask_restore.is_empty() {
+            return; // 无待按回项
+        }
+        let t = Instant::now() + Duration::from_millis(MASK_RESTORE_MS);
+        for (_, at) in self.pending_mask_restore.iter_mut() {
+            if *at < t {
+                *at = t; // 顺延到本次松开之后
+            }
+        }
+    } // 结束 bump_mask_restore 函数
 
     /// 释放一个已注入的键：仍被其它映射按住时只让出本次引用，不真正抬起。
     fn release_key_if_unused(&self, button: TriggerId, code: i32, injector: &InputInjector) {
@@ -342,6 +451,7 @@ impl MapperState {
     /// 注意：不处理 MouseToggle 锁存（toggle 由用户主动锁存，松开不改变状态）。
     // 【Rust 语法】方法：`&mut self` 可变借用（需要从记录中移除条目）。
     pub fn release_button_injection(&mut self, button: TriggerId, injector: &InputInjector) {
+        self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
         // 释放子命令与主键（顺序与注入相反：非修饰子命令 -> 主键 -> 修饰子命令）
         // 【组合键顺序】修饰键（Alt/Ctrl/Shift）必须最后释放，与注入时的"最先按下"对称，
         // 否则 Alt 先于主键松开，游戏（如魔兽）识别不到完整组合键。
@@ -437,6 +547,8 @@ impl MapperState {
         look: &LookState,
         wow_exe: &str, // 目标游戏 exe（长按动作为状态宏时居中用）
     ) {
+        // 到点的延迟按回：把掩蔽抬起的层保持修饰键按回（保证掩蔽窗口跨过 WoW 一帧）
+        self.flush_mask_restore(injector);
         if self.pending_long_press.is_empty() { // 无待判定项时直接返回
             return;
         }
@@ -542,18 +654,10 @@ impl MapperState {
             } // 结束 if 判断
             valid_subs.push(subs[i]); // 收集有效的子命令键码
         } // 结束 for 循环
-        // ① 层保持修饰键掩蔽：切层按住的修饰键中「本映射不需要」的先抬起，
-        // 注入完成后再按回去，保证本键点击不被层保持修饰键污染
-        // （如 LB 按住保持 Ctrl 时按 B=3，游戏应收到 3 而不是 Ctrl+3）。
+        // ① 层保持修饰键掩蔽：切层按住的修饰键中「本映射不需要」的临时抬起，
+        // 延迟到 tick 再按回（WoW 按帧轮询读修饰键，立即按回会被同帧读到按住）。
+        self.mask_lift(&valid_subs, Some(main_key_code), injector);
         let held = self.layer_held_mods_union();
-        let to_mask: Vec<i32> = held
-            .iter()
-            .copied()
-            .filter(|m| !valid_subs.contains(m) && *m != main_key_code)
-            .collect();
-        for &m in &to_mask {
-            injector.force_key_up(m); // 临时抬起层保持修饰键
-        }
         // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于主键；已被层按住的跳过，避免重复按下）
         for &sub in &valid_subs { // 遍历修饰子命令
             if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
@@ -567,10 +671,6 @@ impl MapperState {
                 injector.send_key_down(sub); // 最后按下
             } // 结束 if 判断
         } // 结束 for 循环
-        // ⑤ 恢复被临时抬起的层保持修饰键（继续按住直到松开切层键）
-        for &m in &to_mask {
-            injector.send_key_down(m); // 按回去
-        }
         self.pressed_main_keys.insert(button, main_key_code); // 记录主键已按下
         self.pressed_sub_keys.insert(button, valid_subs); // 记录子命令已按下
     } // 结束 handle_keyboard_key 函数
@@ -593,16 +693,9 @@ impl MapperState {
         let n = subs.len().min(KeyMapping::MAX_SUB_COMMANDS);
         // 【Rust 语法】`subs[..n].to_vec()`：切片取前 n 个元素并复制为 Vec<i32>（子命令键码列表）。
         let valid_subs: Vec<i32> = subs[..n].to_vec(); // 收集子命令键码
-        // ① 层保持修饰键掩蔽（与 handle_keyboard_key 一致：不需要先抬、完成后按回）
+        // ① 层保持修饰键掩蔽（与 handle_keyboard_key 一致：不需要的抬起，延迟按回）
+        self.mask_lift(&valid_subs, None, injector);
         let held = self.layer_held_mods_union();
-        let to_mask: Vec<i32> = held
-            .iter()
-            .copied()
-            .filter(|m| !valid_subs.contains(m))
-            .collect();
-        for &m in &to_mask {
-            injector.force_key_up(m); // 临时抬起层保持修饰键
-        }
         // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于滚轮事件；已被层按住的跳过）
         for &sub in &valid_subs { // 遍历修饰子命令
             if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
@@ -616,10 +709,6 @@ impl MapperState {
                 injector.send_key_down(sub); // 后按下
             } // 结束 if 判断
         } // 结束 for 循环
-        // ⑤ 恢复被临时抬起的层保持修饰键
-        for &m in &to_mask {
-            injector.send_key_down(m); // 按回去
-        }
         self.pressed_sub_keys.insert(button, valid_subs); // 记录子命令已按下（松开时自动释放）
     } // 结束 handle_wheel 函数
 
@@ -635,6 +724,8 @@ impl MapperState {
         if self.pressed_mouse_buttons.contains_key(&button) { // 若该按钮的鼠标键已按下
             return; // 已按下则忽略重复
         } // 结束 if 判断
+        // 层保持修饰键掩蔽：鼠标点击按下事件不应被切层保持的修饰键污染（如 Shift+左键）
+        self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
         injector.send_mouse_down(mb); // 注入鼠标键按下
         self.pressed_mouse_buttons.insert(button, mb); // 记录按下状态
         self.pressed_mouse_layer.insert(button, layer_id.to_string()); // 记录来源层（需求6）
@@ -652,6 +743,7 @@ impl MapperState {
         event_tx: &Sender<UiEvent>, // 事件通道发送端引用（只读）
     ) { // 结束参数列表，函数体开始
         if self.toggled_mouse_buttons.contains_key(&button) { // 若当前已锁存，则本次按下为"解除锁存"
+            self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
             injector.send_mouse_up(mb); // 抬起鼠标键
             self.toggled_mouse_buttons.remove(&button); // 移除锁存记录
             self.toggled_mouse_layer.remove(&button); // 移除来源层记录
@@ -661,6 +753,8 @@ impl MapperState {
                 active: false, // 标记为非激活
             }); // 结束事件构造与发送
         } else { // 否则本次按下为"建立锁存"
+            // 层保持修饰键掩蔽：建立锁存的按下事件不应被切层保持的修饰键污染
+            self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
             injector.send_mouse_down(mb); // 按下并保持鼠标键（锁存）
             self.toggled_mouse_buttons.insert(button, mb); // 记录锁存状态
             self.toggled_mouse_layer.insert(button, layer_id.to_string()); // 记录来源层（需求6）
@@ -764,6 +858,8 @@ impl MapperState {
         let (w, h) = injector.screen_size(); // 主屏尺寸
         injector.set_cursor_pos(w / 2, h / 2); // 光标移到屏幕中央
         thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待光标就位
+        // 层保持修饰键掩蔽：交互点击不应被切层保持的修饰键污染（如 Shift+右键）
+        self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
         injector.send_mouse_down(MouseButton::Right); // 右键按下
         injector.send_mouse_up(MouseButton::Right); // 右键抬起（完成一次点击）
         thread::sleep(Duration::from_millis(INTERACTION_CLICK_GAP_MS)); // 等待点击生效
@@ -771,10 +867,10 @@ impl MapperState {
         // c. 光标移回原位置，再恢复锁存状态
         injector.set_cursor_pos(saved_x, saved_y);
         if left_locked {
-            injector.send_mouse_down(MouseButton::Left); // 恢复左键锁存
+            self.masked_mouse_down(MouseButton::Left, injector); // 恢复左键锁存（掩蔽层保持修饰键）
         }
         if right_locked {
-            injector.send_mouse_down(MouseButton::Right); // 恢复右键锁存
+            self.masked_mouse_down(MouseButton::Right, injector); // 恢复右键锁存（掩蔽层保持修饰键）
         }
     } // 结束 handle_interaction_key 函数
 
@@ -858,11 +954,11 @@ impl MapperState {
 
         // 3) 按「交换后的状态」重新锁存：左 <-> 右
         if right_locked {
-            injector.send_mouse_down(MouseButton::Left); // 原右键锁存 -> 改为左键
+            self.masked_mouse_down(MouseButton::Left, injector); // 原右键锁存 -> 改为左键（掩蔽层保持修饰键）
             self.extra_toggled.insert(MouseButton::Left);
         }
         if left_locked {
-            injector.send_mouse_down(MouseButton::Right); // 原左键锁存 -> 改为右键
+            self.masked_mouse_down(MouseButton::Right, injector); // 原左键锁存 -> 改为右键（掩蔽层保持修饰键）
             self.extra_toggled.insert(MouseButton::Right);
         }
 
@@ -910,6 +1006,7 @@ impl MapperState {
             return;
         }
         crate::dbg_log!("释放自动右键：真正松开注入的右键");
+        self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
         injector.send_mouse_up(MouseButton::Right); // 松开自动锁定的右键
         self.auto_locked_right = false;
     } // 结束 release_auto_right_lock 函数
@@ -937,6 +1034,7 @@ impl MapperState {
         for button in pressed {
             if let Some(mb) = self.pressed_mouse_buttons.get(&button).copied() {
                 if is_left_right(mb) {
+                    self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
                     injector.send_mouse_up(mb); // 松开左右键
                     self.pressed_mouse_buttons.remove(&button);
                 }
@@ -1063,6 +1161,8 @@ impl MapperState {
             injector.set_cursor_pos(-(sw * 2 / 3), sh + sh * 2 / 3);
             // 先无条件松开一次再按下，保证产生一个干净的「按下沿」：
             // 系统认为已按下时，重复注入的「按下」不会产生新事件，游戏收不到拖拽。
+            // 层保持修饰键掩蔽：自动锁定右键的按下事件不应被切层保持修饰键污染
+            self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
             injector.force_mouse_up(MouseButton::Right);
             injector.send_mouse_down(MouseButton::Right); // 锁定鼠标右键
             self.auto_locked_right = true;
@@ -1115,17 +1215,29 @@ impl MapperState {
             .copied() // 把 &i32 拷贝为 i32 值
             .filter(|kc| !target.contains(kc)) // 保留"上一轮按下但本轮不再需要"的键（差集）
             .collect(); // 收集为 Vec<i32>
+        let had_release = !to_release.is_empty(); // 循环会消费 to_release，先记录是否有松开
         for kc in to_release { // 遍历待释放的键
             send_stick_key(kc, false, hwnd, injector); // 松开不再需要的键
             self.left_stick_pressed_keys.remove(&kc); // 从按下记录中移除
         } // 结束 for 循环
-        // 计算需要按下的键（新按下的）
-        for kc in target { // 【Rust 语法】for kc in target：按值遍历集合（Set 已不再使用）
-            if !self.left_stick_pressed_keys.contains(&kc) { // 若该键尚未按下
+        if had_release {
+            self.bump_mask_restore(); // 方向键松开：顺延掩蔽修饰键的按回时刻
+        }
+        // 计算需要按下的键（新按下的）；仅当确实有新键要按下时才掩蔽层保持修饰键
+        // （本段每个轮询 tick 都会执行，若无条件掩蔽会把修饰键反复「抬起→按回」，
+        // 导致 WoW 动作条持续闪烁；WASD 按下时抬修饰键保证移动不被污染，如 Shift+W 变技能）
+        let to_press: Vec<i32> = target
+            .iter()
+            .copied()
+            .filter(|kc| !self.left_stick_pressed_keys.contains(kc))
+            .collect();
+        if !to_press.is_empty() {
+            self.mask_lift(&[], None, injector);
+            for kc in to_press {
                 send_stick_key(kc, true, hwnd, injector); // 注入按下
                 self.left_stick_pressed_keys.insert(kc); // 记录已按下
-            } // 结束 if 判断
-        } // 结束 for 循环
+            } // 结束 for 循环
+        }
 
         // 摇杆回中/WASD 释放不解锁：右键锁存保持到用户主动解除（需求3 修正）
     } // 结束 handle_stick 函数
