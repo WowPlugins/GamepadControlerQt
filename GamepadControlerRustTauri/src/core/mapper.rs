@@ -28,6 +28,8 @@ use crate::core::mapping_types::{ActionType, KeyMapping, MappedAction};
 use crate::core::UiEvent;
 // 【Rust 语法】use 导入语句：导入按 exe 定位窗口并投递键盘消息的辅助模块。
 use crate::core::wow_sender;
+// 诊断用：读取系统修饰键实时状态，确认掩蔽抬起是否真正生效
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 // 【Rust 语法】use 嵌套导入：HashMap（键值映射）与 HashSet（不重复元素集合）。
 use std::collections::{HashMap, HashSet};
 // 【Rust 语法】use 嵌套导入：原子类型 AtomicBool/AtomicU32 与内存序 Ordering，用于多线程无锁共享数据。
@@ -57,6 +59,9 @@ const UNLOCK_SETTLE_MS: u64 = 50;
 // 层保持修饰键掩蔽后的延迟按回时间：WoW 按帧轮询读修饰键状态，
 // 抬起与按回必须在不同帧之间，游戏才能看到「不带修饰」的按下事件。
 const MASK_RESTORE_MS: u64 = 50;
+// 掩蔽抬起修饰键后、注入主键前的等待时间（毫秒）：给游戏留出处理「修饰键抬起」的时间，
+// 否则主键可能与抬起同批到达，游戏仍按组合键处理（如 Ctrl+Tab 无绑定 → 完全无反应）。
+const MASK_LIFT_SETTLE_MS: u64 = 8;
 
 // ---------------------------------------------------------------------
 // LookState —— 右摇杆原子状态（look 线程读取，主线程/手柄线程写入）
@@ -133,6 +138,7 @@ struct PendingLongPress {
     action: MappedAction,      // 满足阈值后要执行的长按动作
     subs: Vec<i32>,            // 长按动作的子命令键码
     layer_id: String,          // 该映射所在的层（释放层内鼠标时使用）
+    layer_only: bool,          // 长按「只切换层」开关（是否掩蔽已按住的修饰键）
 } // 结束 PendingLongPress 结构体
 
 /// 鼠标键是否为左/右键（需求6 只释放左右键锁存）
@@ -166,10 +172,7 @@ pub struct MapperState {
     pub pressed_main_keys: HashMap<TriggerId, i32>, // 当前按下的主键记录（触发源 -> 键码）
     /// 触发源 -> 已按下的子命令
     pub pressed_sub_keys: HashMap<TriggerId, Vec<i32>>, // 已按下的组合键子命令记录
-    /// 切层保持的修饰键：层 id -> 因「切层+子命令一起触发」而按下保持的修饰键
-    /// （按住切层键期间保持，松开切层键时抬起；仅收集 sub_on_layer_hold 为 true 的点击子命令）
-    pub layer_held_mods: HashMap<String, Vec<i32>>,
-    /// 掩蔽延迟按回队列：被临时抬起的层保持修饰键 -> 按回时刻（tick 到点按回）
+    /// 掩蔽延迟按回队列：被临时抬起的修饰键 -> 按回时刻（tick 到点按回）
     pub pending_mask_restore: Vec<(i32, Instant)>,
     /// 触发源 -> 鼠标键
     pub pressed_mouse_buttons: HashMap<TriggerId, MouseButton>, // 当前按下的鼠标键记录
@@ -249,7 +252,7 @@ impl MapperState {
         self.auto_locked_right = false; // 清除自动锁定标记
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
-        self.layer_held_mods.clear(); // 清空切层保持的修饰键记录（注入器已统一松开）
+        self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
         self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
         // 直发通道（PostMessage）按下的 WASD 不在注入器记录里，需单独抬起，避免游戏里卡键
         if self.stick_keys_via_post && self.wow_hwnd != 0 {
@@ -284,77 +287,41 @@ impl MapperState {
         let blocks = |b: &TriggerId| *b != button && !matches!(b, TriggerId::Kb(_));
         self.pressed_main_keys.iter().any(|(b, k)| blocks(b) && *k == code) // 其它触发源的主键
             || self.pressed_sub_keys.iter().any(|(b, subs)| blocks(b) && subs.contains(&code)) // 其它触发源的子命令
-            || self.layer_held_mods.values().any(|mods| mods.contains(&code)) // 切层保持的修饰键（松开按键时不应抬起层保持的修饰键）
     } // 结束 key_held_by_other 函数
 
-    /// 当前所有激活层保持的修饰键并集（去重）
-    fn layer_held_mods_union(&self) -> Vec<i32> {
-        let mut union: Vec<i32> = Vec::new();
-        for mods in self.layer_held_mods.values() {
-            for m in mods {
-                if !union.contains(m) {
-                    union.push(*m);
+    /// 当前已注入并保持按下的修饰键（去重）。
+    /// 典型为切层键注入并保持的 Ctrl/Shift/Alt；「只切换层」动作执行前会临时抬起它们。
+    fn held_modifiers(&self) -> Vec<i32> {
+        let mut out: Vec<i32> = Vec::new(); // 结果集
+        for &k in self.pressed_main_keys.values() { // 已按住的主键
+            if is_modifier_key(k) && !out.contains(&k) {
+                out.push(k);
+            }
+        }
+        for subs in self.pressed_sub_keys.values() { // 已按住的子命令
+            for &k in subs {
+                if is_modifier_key(k) && !out.contains(&k) {
+                    out.push(k);
                 }
             }
         }
-        union
-    } // 结束 layer_held_mods_union 函数
+        out
+    } // 结束 held_modifiers 函数
 
     /// 切层激活：把该层「切层保持开关 ON」的按键修饰子命令按下并保持（层 id -> 修饰键列表）。
-    /// 已被其它层按住的同一修饰键不重复按下，但本层记录仍包含它（本层停用时不误抬）。
-    pub fn press_layer_mods(
-        &mut self,
-        layer_id: &str,
-        mods: &[i32],
-        injector: &InputInjector,
-    ) {
-        if mods.is_empty() {
-            return;
-        }
-        let mut held = self.layer_held_mods_union();
-        let entry = self.layer_held_mods.entry(layer_id.to_string()).or_default();
-        for &m in mods {
-            // 该键正处掩蔽延迟按回状态（物理已抬起）：取消延迟并立即按回
-            if self.pending_mask_restore.iter().any(|(p, _)| *p == m) {
-                self.pending_mask_restore.retain(|(p, _)| *p != m);
-                injector.send_key_down(m); // 立即按回
-            }
-            if !held.contains(&m) {
-                injector.send_key_down(m); // 首次被保持：按下修饰键
-                held.push(m);
-            }
-            if !entry.contains(&m) {
-                entry.push(m); // 记录本层依赖该修饰键
-            }
-        }
-    } // 结束 press_layer_mods 函数
-
-    /// 切层停用：抬起该层保持的修饰键（仍被其它层保持的不抬）。
-    pub fn release_layer_mods(&mut self, layer_id: &str, injector: &InputInjector) {
-        if let Some(mods) = self.layer_held_mods.remove(layer_id) {
-            for &m in mods.iter().rev() {
-                if self.layer_held_mods.values().any(|v| v.contains(&m)) {
-                    continue; // 其它层还在用，保持按下
-                }
-                // 该键不再被保持：取消延迟按回记录，避免之后被错误按回
-                self.pending_mask_restore.retain(|(p, _)| *p != m);
-                injector.force_key_up(m); // 强制抬起：按下记录可能已被触发通道消耗
-            }
-        }
-    } // 结束 release_layer_mods 函数
-
-    /// 掩蔽式鼠标按下：临时抬起层保持修饰键 -> 鼠标按下（修饰键延迟按回，见 mask_lift）。
-    /// 鼠标按下事件不应被切层保持的修饰键污染（如 Shift+右键）。
+    /// 掩蔽式鼠标按下：临时抬起已按住的修饰键 -> 鼠标按下（修饰键延迟按回，见 mask_lift）。
+    /// 鼠标按下事件不应被切层键注入的修饰键污染（如 Shift+右键）。
     fn masked_mouse_down(&mut self, mb: MouseButton, injector: &InputInjector) {
         self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
         injector.send_mouse_down(mb); // 注入鼠标键按下
     } // 结束 masked_mouse_down 函数
 
-    /// 掩蔽抬起：把「当前注入不需要」的层保持修饰键临时抬起，并登记延迟按回；
+    /// 掩蔽抬起：把「当前注入不需要」的已按住修饰键临时抬起，并登记延迟按回；
     /// 当前注入需要、但正处于延迟按回状态（物理已抬起）的修饰键则立即按回。
     /// WoW 按帧轮询读修饰键状态：若抬起后立即按回，游戏在同一帧内仍会读到按住，
     /// 因此按回交给 flush_mask_restore 在 MASK_RESTORE_MS 后执行。
-    fn mask_lift(&mut self, keep: &[i32], main_key: Option<i32>, injector: &InputInjector) {
+    fn mask_lift(&mut self, keep: &[i32], main_key: Option<i32>, injector: &InputInjector) -> bool {
+        let mut newly_lifted = false; // 本次是否新抬起过修饰键（用于注入前留出处理间隔）
         // 当前注入需要的修饰键若正处延迟按回队列：立即按回（取消延迟）
         self.pending_mask_restore.retain(|(m, _)| {
             if keep.contains(m) || main_key == Some(*m) {
@@ -364,33 +331,41 @@ impl MapperState {
                 true // 保留
             }
         });
-        let held = self.layer_held_mods_union();
+        let held = self.held_modifiers();
         for &m in &held {
             if keep.contains(&m) || main_key == Some(m) {
                 continue; // 当前注入需要它：保持按下不动
             }
             if let Some(pos) = self.pending_mask_restore.iter().position(|(p, _)| *p == m) {
+                // 队列里只是「曾抬起」的记录：若期间它又被按下（如再次按住切层键重新注入修饰键），
+                // 必须重新抬起，否则物理仍处于按下状态，主键会变成组合键（Ctrl+Tab 无绑定而失效）。
+                injector.force_key_up(m); // 重新抬起（已抬起时重复发送无副作用）
+                crate::dbg_log!("掩蔽再次抬起修饰键 {}", m); // 诊断日志
                 // 滑动窗口：已抬起的修饰键把按回时刻顺延（保持抬起直到最后一次动作后一段时间）
                 self.pending_mask_restore[pos].1 =
                     Instant::now() + Duration::from_millis(MASK_RESTORE_MS);
+                newly_lifted = true; // 标记本次有新抬起
                 continue; // 已抬起等待延迟按回，不重复操作
             }
             injector.force_key_up(m); // 抬起
+            crate::dbg_log!("掩蔽抬起修饰键 {}（keep={:?} main={:?}）", m, keep, main_key); // 诊断日志
             self.pending_mask_restore
                 .push((m, Instant::now() + Duration::from_millis(MASK_RESTORE_MS)));
+            newly_lifted = true; // 标记本次有新抬起
         }
+        newly_lifted // 返回是否新抬起
     } // 结束 mask_lift 函数
 
-    /// 是否还有「当前已注入并保持按下」的键鼠（鼠标键、摇杆方向键、键盘主键/子命令）。
-    /// 用于判断掩蔽的修饰键能否按回：按住期间不能按回，否则会被游戏读到。
+    /// 是否还有「持续按住」的鼠标/摇杆注入（鼠标键、鼠标锁存、摇杆方向键）。
+    /// 这些状态在按住期间会持续被游戏读取，掩蔽的修饰键不能提前按回，
+    /// 否则会出现「按住左键拖拽时中途变成 Shift+左键」。
+    /// 键盘按键只在按下瞬间判定，不在此列（松开后延迟按回即可）。
     fn has_pressed_injection(&self) -> bool {
         !self.pressed_mouse_buttons.is_empty() // 有鼠标键按下
             || !self.toggled_mouse_buttons.is_empty() // 有鼠标锁存
             || !self.extra_toggled.is_empty() // 有交换产生的鼠标锁存
             || self.auto_locked_right // WASD 自动锁定右键
             || !self.left_stick_pressed_keys.is_empty() // 摇杆方向键按下
-            || !self.pressed_main_keys.is_empty() // 键盘主键按下
-            || !self.pressed_sub_keys.is_empty() // 子命令键按下
     } // 结束 has_pressed_injection 函数
 
     /// 到点的延迟按回修饰键（每 tick 调用）：仅当该键仍被某层保持时才按回。
@@ -415,9 +390,9 @@ impl MapperState {
             let (m, at) = self.pending_mask_restore[i];
             if now >= at { // 到点
                 self.pending_mask_restore.remove(i);
-                if self.layer_held_mods_union().contains(&m) {
-                    injector.send_key_down(m); // 层仍保持：按回
-                } // 层已停用：不按回（release_layer_mods 已抬起）
+                if self.held_modifiers().contains(&m) {
+                    injector.send_key_down(m); // 仍被按住：按回
+                } // 已不再按住：不按回（松开时已抬起）
             } else {
                 i += 1;
             }
@@ -495,13 +470,15 @@ impl MapperState {
         look: &LookState, // 视角状态引用（精细移动开关）
         wow_exe: &str, // 目标游戏 exe（状态宏居中按游戏客户区计算）
     ) { // 结束参数列表，函数体开始
+        // 「只切换层」在公共层无效：公共层没有切层键按住的修饰键，不参与掩蔽
+        let click_layer_only = mapping.click_layer_only && layer_id != "Common";
         if !is_pressed { // 松开分支
             let fired_long = self.long_press_buttons.remove(&button); // 该按钮是否已触发过长按
             let had_pending = self.pending_long_press.remove(&button).is_some(); // 是否还有未判定的长按
             // 配置了长按但未超阈值就松开：此时才执行短按动作（按下记录 + 立即释放 = 一次点按），
             // 这样长按时不会先误触发短按。切层动作在按下时已执行，跳过以免重复切层。
             if had_pending && !fired_long && !matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe);
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, injector, event_tx, look, wow_exe);
             }
             // 精细移动：按「本次实际执行的动作」复位——长按触发时用长按动作类型，否则用主动作类型
             let acted = if fired_long { mapping.long_press.as_ref() } else { Some(&mapping.action) };
@@ -519,7 +496,7 @@ impl MapperState {
             // 配置了长按动作：按下先不执行短按，等松开（未超阈值）或 Tick 判定超阈值后再决定，
             // 避免长按时先触发一次短按（点击）。
             if matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, false, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
             }
             let threshold = mapping.long_press_ms.clamp(100, 5000); // 阈值限幅 100~5000ms
             self.pending_long_press.insert(
@@ -530,13 +507,14 @@ impl MapperState {
                     action: long_action.clone(), // 长按动作
                     subs: mapping.long_press_subs.clone(), // 长按子命令
                     layer_id: layer_id.to_string(), // 来源层
+                    layer_only: mapping.long_press_layer_only, // 长按「只切换层」开关
                 },
             );
             return; // 短按延后到松手时执行
         }
 
         // 未配置长按：按下立即执行短按动作
-        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, injector, event_tx, look, wow_exe);
+        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, injector, event_tx, look, wow_exe);
     } // 结束 handle_button 函数
 
     /// 长按检查（由轮询线程每个 Tick 调用）：满足阈值的按钮切换为长按动作
@@ -565,7 +543,7 @@ impl MapperState {
                 self.release_button_injection(button, injector); // 先释放按下时已注入的状态（配置长按后短按未注入，通常无内容）
                 self.long_press_buttons.insert(button); // 标记为长按已触发
                 let layer = p.layer_id.clone(); // 先克隆层 id，避免与 &mut self 借用冲突
-                self.execute_press(button, &p.action, &p.subs, &layer, injector, event_tx, look, wow_exe); // 执行长按动作
+                self.execute_press(button, &p.action, &p.subs, &layer, p.layer_only, injector, event_tx, look, wow_exe); // 执行长按动作
             } // 结束 if let 分支
         } // 结束 for 循环
     } // 结束 check_long_press 函数
@@ -577,6 +555,7 @@ impl MapperState {
         action: &MappedAction,
         subs: &[i32],
         layer_id: &str,
+        layer_only: bool, // 「只切换层」开关：键盘/滚轮注入前是否掩蔽已按住的修饰键
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         look: &LookState,
@@ -585,7 +564,7 @@ impl MapperState {
         // 【Rust 语法】match 模式匹配：按动作类型分发到对应处理逻辑。
         match action.r#type {
             ActionType::KeyboardKey => { // 键盘按键动作
-                self.handle_keyboard_key(button, action.key_code, subs, injector); // 处理组合键按下（主键+子命令）
+                self.handle_keyboard_key(button, action.key_code, subs, layer_only, injector); // 处理组合键按下（主键+子命令）
             } // 结束键盘按键分支
             ActionType::MouseClick => { // 鼠标单击动作
                 self.handle_mouse_click(button, action.mouse_button, layer_id, injector); // 处理鼠标按下
@@ -593,8 +572,8 @@ impl MapperState {
             ActionType::MouseToggle => { // 鼠标长按锁存动作
                 self.handle_mouse_toggle(button, action.mouse_button, layer_id, injector, event_tx); // 处理锁存切换
             } // 结束鼠标长按锁存分支
-            ActionType::WheelUp => self.handle_wheel(button, 1, subs, injector), // 滚轮上滚（支持子命令组合键，如 Alt+滚轮）
-            ActionType::WheelDown => self.handle_wheel(button, -1, subs, injector), // 滚轮下滚（支持子命令组合键）
+            ActionType::WheelUp => self.handle_wheel(button, 1, subs, layer_only, injector), // 滚轮上滚（支持子命令组合键，如 Alt+滚轮）
+            ActionType::WheelDown => self.handle_wheel(button, -1, subs, layer_only, injector), // 滚轮下滚（支持子命令组合键）
             ActionType::InteractionKey => self.handle_interaction_key(injector), // 交互键（需求1）
             ActionType::ReleaseMouseToggle => self.handle_release_mouse_toggle(injector, event_tx, wow_exe), // 释放鼠标锁存（需求4）
             ActionType::SwapMouseToggle => self.handle_swap_mouse_toggle(injector, event_tx), // 交换左右键锁存（需求5）
@@ -616,7 +595,7 @@ impl MapperState {
             }
             ActionType::SwitchLayerAndKey => { // 切层+按键：层已由 SteamInput 激活，此处只注入组合键
                 if action.key_code != 0 { // 未选按键（0）时只切层，不注入
-                    self.handle_keyboard_key(button, action.key_code, subs, injector);
+                    self.handle_keyboard_key(button, action.key_code, subs, false, injector); // 切层键自身不掩蔽
                 }
             }
             // 【Rust 语法】模式 `|`（或）匹配：多个变体共享同一分支代码。
@@ -638,6 +617,7 @@ impl MapperState {
         button: TriggerId, // 触发的手柄按钮
         main_key_code: i32, // 主键键码
         subs: &[i32], // 子命令键码切片（只读借用）
+        layer_only: bool, // 「只切换层」开关：为 true 时注入前掩蔽已按住的修饰键
         injector: &InputInjector, // 注入器引用（只读）
     ) { // 结束参数列表，函数体开始
         if self.pressed_main_keys.contains_key(&button) { // 若该按钮的主键已按下
@@ -654,10 +634,26 @@ impl MapperState {
             } // 结束 if 判断
             valid_subs.push(subs[i]); // 收集有效的子命令键码
         } // 结束 for 循环
-        // ① 层保持修饰键掩蔽：切层按住的修饰键中「本映射不需要」的临时抬起，
+        // ① 「只切换层」开关打开：把切层键已按住的修饰键中「本映射不需要」的临时抬起，
         // 延迟到 tick 再按回（WoW 按帧轮询读修饰键，立即按回会被同帧读到按住）。
-        self.mask_lift(&valid_subs, Some(main_key_code), injector);
-        let held = self.layer_held_mods_union();
+        if layer_only { // 仅开关打开时掩蔽
+            if self.mask_lift(&valid_subs, Some(main_key_code), injector) { // 新抬起了修饰键
+                // 抬起事件与主键之间留一点间隔，确保游戏先处理「修饰键抬起」再收到主键，
+                // 否则原始输入同批到达时游戏仍可能读到修饰键（表现为 Ctrl+Tab 无绑定而完全无反应）。
+                thread::sleep(Duration::from_millis(MASK_LIFT_SETTLE_MS));
+            }
+        }
+        let ctrl_down = unsafe { (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0 }; // 系统 Ctrl 实时状态
+        let shift_down = unsafe { (GetAsyncKeyState(0x10) as u16 & 0x8000) != 0 }; // 系统 Shift 实时状态
+        let held = self.held_modifiers();
+        crate::dbg_log!(
+            "键盘注入 button={:?} main={} subs={:?} layer_only={} held={:?} pending={:?} 系统Ctrl={} 系统Shift={} wow_hwnd={} fg={}",
+            button, main_key_code, valid_subs, layer_only, held,
+            self.pending_mask_restore.iter().map(|(m, _)| *m).collect::<Vec<i32>>(),
+            ctrl_down, shift_down,
+            self.wow_hwnd,
+            wow_sender::foreground_hwnd()
+        );
         // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于主键；已被层按住的跳过，避免重复按下）
         for &sub in &valid_subs { // 遍历修饰子命令
             if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
@@ -684,6 +680,7 @@ impl MapperState {
         button: TriggerId, // 触发的手柄按钮
         dir: i32, // 滚动方向（1 上滚 / -1 下滚）
         subs: &[i32], // 子命令键码切片（只读借用）
+        layer_only: bool, // 「只切换层」开关：为 true 时注入前掩蔽已按住的修饰键
         injector: &InputInjector, // 注入器引用（只读）
     ) { // 结束参数列表，函数体开始
         if self.pressed_sub_keys.contains_key(&button) { // 该按钮的子命令已在按住中
@@ -693,9 +690,11 @@ impl MapperState {
         let n = subs.len().min(KeyMapping::MAX_SUB_COMMANDS);
         // 【Rust 语法】`subs[..n].to_vec()`：切片取前 n 个元素并复制为 Vec<i32>（子命令键码列表）。
         let valid_subs: Vec<i32> = subs[..n].to_vec(); // 收集子命令键码
-        // ① 层保持修饰键掩蔽（与 handle_keyboard_key 一致：不需要的抬起，延迟按回）
-        self.mask_lift(&valid_subs, None, injector);
-        let held = self.layer_held_mods_union();
+        // ① 「只切换层」开关打开：掩蔽已按住的修饰键（与 handle_keyboard_key 一致）
+        if layer_only { // 仅开关打开时掩蔽
+            self.mask_lift(&valid_subs, None, injector);
+        }
+        let held = self.held_modifiers();
         // ② 修饰子命令最先按下（Alt/Ctrl/Shift 优先于滚轮事件；已被层按住的跳过）
         for &sub in &valid_subs { // 遍历修饰子命令
             if is_modifier_key(sub) && !held.contains(&sub) { // 是修饰键且未被层保持
@@ -830,7 +829,7 @@ impl MapperState {
 
         // 3) 按住目标组合键（主键 + 子命令）
         if key_code != 0 {
-            self.handle_keyboard_key(button, key_code, subs, injector);
+            self.handle_keyboard_key(button, key_code, subs, false, injector); // 状态宏内部组合键不掩蔽
         }
     } // 结束 handle_state_macro 函数
 

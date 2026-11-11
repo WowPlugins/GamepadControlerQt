@@ -91,8 +91,8 @@ const STATE_OPTIONS = [
   ['isFalling', '下落中'], ['isSwimming', '游泳中'],
 ];
 
-// LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理，未设置无长按，均不能作为长按动作）
-const LONG_PRESS_KINDS = KINDS.filter(([k]) => k !== 'switchlayer' && k !== 'switchlayerandkey' && k !== 'none' && k !== 'statemacro');
+// LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理、状态宏不可作长按；「未设置」用于取消长按）
+const LONG_PRESS_KINDS = KINDS.filter(([k]) => k === 'none' || (k !== 'switchlayer' && k !== 'switchlayerandkey' && k !== 'statemacro'));
 
 // MOUSE_BUTTONS：可映射的鼠标按键列表，[枚举名, 中文显示名]
 const MOUSE_BUTTONS = [
@@ -265,9 +265,11 @@ function renderEdit(info, map) {
     $('edit-subs-label').textContent = // 子命令标题，显示当前已选数量
       '子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
   }
-  // 切层保持开关：与子命令区同显隐；缺省视为开（兼容旧配置 subOnLayerHold 未返回的情况）
-  $('edit-layerhold-row').style.display = showSubs ? 'flex' : 'none';
-  $('edit-layerhold').checked = map.subOnLayerHold !== false;
+  // 「只切换层」开关：点击开关常显（公共层无切层修饰键，不显示）；长按开关仅在配置了长按动作时显示
+  $('edit-click-only-row').style.display = isCommon ? 'none' : 'flex'; // 公共层隐藏点击开关
+  $('edit-click-only').checked = map.click_layer_only === true; // 点击开关（缺省关闭）
+  $('edit-long-only-row').style.display = map.long_press ? 'flex' : 'none'; // 长按未配置时隐藏
+  $('edit-long-only').checked = map.long_press_layer_only === true; // 长按开关（缺省关闭）
 
   renderStateConditions(map); // 渲染状态条件配置区（需求5）
   renderLongPress(info, map); // 渲染长按动作配置区（需求2）
@@ -312,7 +314,7 @@ function renderLongPress(info, map) {
 
   // 长按动作类型 chips
   $('edit-long-kinds').innerHTML = LONG_PRESS_KINDS.map(([k, label]) => // 遍历可选类型
-    '<div class="chip' + (k === editLongKind ? ' active' : '') + '" ' + // 当前类型加 active
+    '<div class="chip' + ((k === 'none' ? !editLongKind : k === editLongKind) ? ' active' : '') + '" ' + // 未配置时「未设置」高亮
     'onclick="App.setLongKind(' + q(k) + ')">' + label + '</div>' // 点击切换长按类型
   ).join('');
 
@@ -490,11 +492,22 @@ const App = {
   toggleSub(code) { // 切换子命令（追加/移除）
     invoke('toggle_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
   },
-  setSubOnLayerHold(on) { // 切换「切层保持」开关（仅点击子命令参与，不影响长按）
-    invoke('set_sub_on_layer_hold', { layerId: editLayerId, button: selectedButton, on: on });
+  setLayerOnly() { // 切换「只切换层」开关（点击/长按分别保存）
+    invoke('set_layer_only', {
+      layerId: editLayerId,
+      button: selectedButton,
+      click: $('edit-click-only').checked, // 点击开关状态
+      longPress: $('edit-long-only').checked, // 长按开关状态
+    });
   },
   // ---- 长按动作（需求2） ----
   setLongKind(k) { // 切换长按动作类型
+    if (k === 'none') { // 未设置：取消长按动作
+      editLongKind = null; // 清空本地长按类型
+      invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: null, keyCode: null, mouseButton: null, layerName: null });
+      prevEdit = null; // 强制重新渲染
+      return;
+    }
     editLongKind = k; // 更新长按类型
     if (NO_TARGET_KINDS.includes(k)) { // 无需额外目标则直接写入
       invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: null });

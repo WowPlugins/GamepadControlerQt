@@ -277,10 +277,12 @@ pub struct KeyMapping {
     pub action: MappedAction, // 主要动作（按下立即执行）
     // 【Rust 语法】Vec<i32> 为动态可变长度数组（向量）；此处存放组合键的附加键码。
     pub sub_commands: Vec<i32>, // Android KeyCode，最多 MAX_SUB_COMMANDS 个
-    /// 切层保持开关：按住切层键激活本层时，是否把该键「点击」的修饰子命令
-    /// 一并按下保持（松开切层键才抬起）。仅作用于点击设置，不影响长按设置。
-    /// 默认 true（切层+子命令一起触发）。
-    pub sub_on_layer_hold: bool,
+    /// 「只切换层」开关（点击）：打开时执行本动作前临时抬起切层键已按住的修饰键，
+    /// 让游戏只收到本动作自己的键（如按住 LB 注入的 Ctrl 不参与）；关闭时保留修饰键组合。
+    /// 仅作用于键盘按键与滚轮动作。默认打开。
+    pub click_layer_only: bool,
+    /// 「只切换层」开关（长按）：含义同上，作用于长按动作。
+    pub long_press_layer_only: bool,
     /// 长按动作：按住超过 long_press_ms 后替换主动作（None 表示不支持长按）
     pub long_press: Option<MappedAction>,
     /// 长按动作的子命令
@@ -298,7 +300,8 @@ impl Default for KeyMapping {
         Self {
             action: MappedAction::mouse_move(),
             sub_commands: Vec::new(),
-            sub_on_layer_hold: true,
+            click_layer_only: true,
+            long_press_layer_only: false,
             long_press: None,
             long_press_subs: Vec::new(),
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS,
@@ -320,7 +323,8 @@ impl KeyMapping {
         Self {
             action,
             sub_commands: Vec::new(),
-            sub_on_layer_hold: true,
+            click_layer_only: true,
+            long_press_layer_only: false,
             long_press: None,
             long_press_subs: Vec::new(),
             long_press_ms: Self::DEFAULT_LONG_PRESS_MS,

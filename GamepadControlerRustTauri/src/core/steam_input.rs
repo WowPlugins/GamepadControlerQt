@@ -28,24 +28,6 @@ use std::sync::mpsc::Sender; // 【Rust 语法】mpsc = 多生产者单消费者
 // 与 Clone（克隆）两个 trait，免去手写 impl 代码。Rust 用 #[...] 属性给编译器附加信息。
 /// 收集指定层内「切层保持开关 ON」按键的修饰子命令（去重，仅修饰键）。
 /// 按住切层键激活该层时，这些修饰键会被映射器按下保持；松开切层键随层停用抬起。
-fn collect_layer_hold_mods(profile: &ControllerProfile, layer_id: &str) -> Vec<i32> {
-    let mut mods: Vec<i32> = Vec::new();
-    let Some(layer) = profile.find_layer(layer_id) else {
-        return mods;
-    };
-    for m in layer.button_mappings.values() {
-        if !m.sub_on_layer_hold || m.sub_commands.is_empty() {
-            continue; // 开关关闭或无子命令：不参与切层保持
-        }
-        for s in &m.sub_commands {
-            if crate::core::mapper::is_modifier_key(*s) && !mods.contains(s) {
-                mods.push(*s); // 仅收集修饰键（Ctrl/Alt/Shift/Win）
-            }
-        }
-    }
-    mods
-} // 结束 collect_layer_hold_mods 函数
-
 #[derive(Debug, Clone)]
 // 【Rust 语法】pub enum 定义枚举：成员称为「变体」；比 C++ 的 enum class 更强大，因为变体可以携带数据。
 pub enum ButtonDispatch {
@@ -60,9 +42,6 @@ pub enum ButtonDispatch {
     },
     /// 松开激活层的按钮：该层已停用，需释放该层内产生的鼠标左右键锁存（需求6）
     DeactivateLayer(String),
-    /// 切层激活新层：该层「切层保持开关 ON」按键的修饰子命令，交给映射器按下保持
-    /// （按住切层键期间全局按住这些修饰键，松开切层键时随层停用抬起）
-    ActivateLayerMods { layer_id: String, mods: Vec<i32> },
     /// 切换映射启停请求（ToggleMapping）
     ToggleMapping, // 切换映射启停请求
     /// 切换屏幕键盘请求（ToggleOnScreenKeyboard）
@@ -283,7 +262,6 @@ impl SteamInput {
         // 切层+按键动作：引擎先激活目标层，再把组合键交给映射器注入（松开时由外层按已注入状态释放）
         let combo_key = mapping.action.r#type == ActionType::SwitchLayerAndKey; // 是否为「切层+按键」
         if mapping.action.r#type == ActionType::SwitchLayer || combo_key { // 【Rust 语法】r#type 原始标识符访问字段（type 是关键字）；== 比较枚举值
-            let mut newly_activated: Option<String> = None; // 本次按下新激活的层 id（供收集切层保持修饰键）
             if is_pressed { // 仅在按下时激活层
                 let target = mapping.action.layer_name.clone().unwrap_or_default(); // 【Rust 语法】Option::unwrap_or_default()：
                 // Some 取内部值，None 取该类型默认值（String 默认空串）。
@@ -303,7 +281,6 @@ impl SteamInput {
                     if !self.is_layer_active(&tid) { // 目标层尚未激活
                         self.activate_layer(&tid); // 激活目标层
                         self.button_triggered_layers.insert(button, tid.clone()); // 【Rust 语法】HashMap::insert：记录「该按钮 → 激活的层」，松开时据此停用
-                        newly_activated = Some(tid); // 记录本次新激活的层
                     } // 未激活分支结束
                 } // 有目标分支结束
             } // 按下分支结束
@@ -314,14 +291,7 @@ impl SteamInput {
                     layer_id, // 映射命中层 id
                 }; // Execute 变体构造结束
             } // combo_key 分支结束
-            // 纯切层：新激活层内「切层保持开关 ON」按键的修饰子命令，交给映射器按下保持
-            // （按住切层键期间全局按住修饰键；松开切层键时随 DeactivateLayer 抬起）。
-            if let Some(tid) = newly_activated {
-                let mods = collect_layer_hold_mods(&self.profile, &tid);
-                if !mods.is_empty() {
-                    return ButtonDispatch::ActivateLayerMods { layer_id: tid, mods };
-                }
-            }
+            // 纯切层：不注入任何键（修饰键由切层键自身的「切换层+按键」动作提供）
             return ButtonDispatch::None; // 切换层动作不交给映射器执行注入
         } // SwitchLayer / SwitchLayerAndKey 分支结束
 

@@ -146,7 +146,8 @@ pub struct MappingView { // 单个按键映射的展示视图
     kind: String, // 动作类型字符串（keyboard / mouse / ...）
     desc: String, // 动作描述
     subs: Vec<String>, // 子命令键码（组合键）列表
-    sub_on_layer_hold: bool, // 切层保持开关：切到本层时是否把点击子命令修饰键一起按下保持
+    click_layer_only: bool, // 点击「只切换层」开关：注入前是否掩蔽切层键按住的修饰键
+    long_press_layer_only: bool, // 长按「只切换层」开关：含义同上
     has_mapping: bool, // 是否已有映射
     mouse_button: Option<MouseButton>, // 鼠标键（Some 表示有，None 表示无）
     layer_name: Option<String>, // 目标层名称（切换层动作时使用）
@@ -173,7 +174,8 @@ impl MappingView {
             kind: "keyboard".into(), // 【Rust 语法】.into() 类型转换：把 &str 字面量转换为 String
             desc: "（无映射）".into(), // 空映射的描述文本
             subs: Vec::new(), // 空子命令列表
-            sub_on_layer_hold: true, // 切层保持开关默认开
+            click_layer_only: true, // 点击「只切换层」开关默认打开
+            long_press_layer_only: false, // 长按「只切换层」开关默认关闭
             has_mapping: false, // 标记为无映射
             mouse_button: None, // 无鼠标键
             layer_name: None, // 无目标层名称
@@ -1048,7 +1050,8 @@ pub fn get_mapping(state: State<'_, AppState>, layer_id: String, button: String)
             kind: kind_str(&m.action), // 动作类型字符串
             desc: describe_action(&m.action), // 动作描述
             subs: m.sub_commands.iter().map(|&k| key_code_to_name(k)).collect(), // 【Rust 语法】闭包 |&k| 解构引用；子命令键码转名称
-            sub_on_layer_hold: m.sub_on_layer_hold, // 切层保持开关状态
+            click_layer_only: m.click_layer_only, // 点击「只切换层」开关
+            long_press_layer_only: m.long_press_layer_only, // 长按「只切换层」开关
             has_mapping: true, // 标记有映射
             mouse_button: Some(m.action.mouse_button), // 鼠标键（Some 表示有，None 表示无）
             layer_name: m.action.layer_name.clone(), // 目标层名称（切换层动作时使用）
@@ -1299,14 +1302,15 @@ pub fn toggle_sub(state: State<'_, AppState>, layer_id: String, button: String, 
     } // 外层 if-let 结束
 } // 函数结束
 
-/// 设置「切层保持」开关：切到本层时是否把该键点击的子命令修饰键一起按下保持。
-/// 仅作用于点击设置，不影响长按设置。
+/// 设置「只切换层」开关：打开时该动作注入前临时抬起切层键已按住的修饰键
+/// （如按住 LB 注入的 Ctrl 不参与本次按键）；点击与长按分别设置。
 #[tauri::command]
-pub fn set_sub_on_layer_hold(
+pub fn set_layer_only(
     state: State<'_, AppState>,
     layer_id: String,
     button: String,
-    on: bool,
+    click: bool,
+    long_press: bool,
 ) {
     let Some(b) = controller_button_from_name(&button) else { // 按钮名转枚举
         return; // 无效则返回
@@ -1314,7 +1318,8 @@ pub fn set_sub_on_layer_hold(
     let mut core = state.shared.core.lock().unwrap(); // 加锁取可变访问
     if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) { // 可变借用查找层
         if let Some(m) = layer.button_mappings.get_mut(&b) { // 可变借用该按钮的映射
-            m.sub_on_layer_hold = on; // 写入开关状态
+            m.click_layer_only = click; // 写入点击开关
+            m.long_press_layer_only = long_press; // 写入长按开关
             core.profile_rev += 1; // 配置版本号自增
         } // 内层 if-let 结束
     } // 外层 if-let 结束

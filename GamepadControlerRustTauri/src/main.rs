@@ -143,7 +143,7 @@ fn main() { // 程序主入口
             commands::set_mapping, // 写入按键映射
             commands::clear_mapping, // 清空按键映射
             commands::toggle_sub, // 切换子命令
-            commands::set_sub_on_layer_hold, // 设置切层保持开关
+            commands::set_layer_only, // 设置「只切换层」开关（点击/长按）
             commands::open_app, // 打开应用
             commands::rename_layer, // 重命名层集
             commands::change_layer_trigger_button, // 改变层的激活按钮
