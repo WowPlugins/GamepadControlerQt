@@ -657,6 +657,9 @@ class SwitchTarget {
 class ButtonGridItem {
   name / display: String
   pressed: bool
+  desc: String
+  long_desc: Option<String>
+  click_layer_only / long_layer_only: bool
 }
 class LayerEditSnapshot {
   layer_name: String

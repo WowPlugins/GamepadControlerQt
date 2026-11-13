@@ -117,6 +117,10 @@ pub struct ButtonGridItem { // 层编辑界面按钮网格的一个格子
     name: String, // 按钮的枚举名（供前端回传识别）
     display: String, // 按钮显示名
     pressed: bool, // 是否被按住（用于实时高亮）
+    desc: String, // 点击/主动作描述（空串表示未映射）
+    long_desc: Option<String>, // 长按动作描述（None 表示未配置长按）
+    click_layer_only: bool, // 点击「只切换层」开关是否打开
+    long_layer_only: bool, // 长按「只切换层」开关是否打开
 } // 结构体结束
 
 // 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
@@ -1020,10 +1024,27 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
     let held = core.steam.held_buttons(); // 当前按住的按钮集合
     let buttons: Vec<ButtonGridItem> = all_controller_buttons() // 收集按钮网格数据
         .into_iter() // 【Rust 语法】into_iter()：消费所有权生成迭代器
-        .map(|b| ButtonGridItem { // 逐个按钮转换
-            name: controller_button_name(b).to_string(), // 按钮枚举名
-            display: controller_button_display_name(b).to_string(), // 按钮显示名
-            pressed: held.contains(&b), // 是否被按住
+        .map(|b| { // 逐个按钮转换
+            let m = layer.get_mapping(b); // 该按键在当前层的映射（None 表示未映射）
+            let desc = m.map(|k| k.describe()).unwrap_or_default(); // 点击/主动作描述：未映射为空串
+            // 长按动作描述（含长按子命令）；未配置长按时为 None
+            let long_desc = m.and_then(|k| { // 有映射才继续
+                let lp = k.long_press.as_ref()?; // 未配置长按直接返回 None
+                let mut parts = vec![describe_action(lp)]; // 长按主动作描述
+                for &sub in &k.long_press_subs { // 追加长按子命令（组合键）
+                    parts.push(key_code_to_name(sub)); // 子命令键码转名称
+                } // for 结束
+                Some(parts.join("+")) // 用 + 连接成完整长按描述
+            }); // long_desc 计算结束
+            ButtonGridItem { // 构造按钮格子数据
+                name: controller_button_name(b).to_string(), // 按钮枚举名
+                display: controller_button_display_name(b).to_string(), // 按钮显示名
+                pressed: held.contains(&b), // 是否被按住
+                desc, // 点击/主动作描述
+                long_desc, // 长按动作描述
+                click_layer_only: m.map(|k| k.click_layer_only).unwrap_or(false), // 点击「只切换层」开关
+                long_layer_only: m.map(|k| k.long_press_layer_only).unwrap_or(false), // 长按「只切换层」开关
+            } // 结构体结束
         }) // 闭包返回 ButtonGridItem
         .collect(); // 收集为 Vec<ButtonGridItem>
     LayerEditSnapshot { // 构造层编辑快照

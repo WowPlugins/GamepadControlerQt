@@ -607,7 +607,7 @@ body::before {
   display: flex; /* 弹性布局 */
   flex-direction: column; /* 垂直排列按键 */
   gap: 6px; /* 按键间距 */
-  width: 180px; /* 固定宽度 */
+  width: 200px; /* 固定宽度（略宽，减少映射描述换行） */
   flex-shrink: 0; /* 不允许压缩 */
   overflow-y: auto; /* 超出滚动 */
   padding: 4px 8px 6px 0; /* 顶部/底部留白：避免按钮悬停上浮与投影被滚动容器边缘裁剪 */
@@ -615,13 +615,16 @@ body::before {
 
 .pad-btn {
   width: 100%; /* 占满整行 */
+  flex-shrink: 0; /* 禁止被 flex 容器压缩（否则两行文字被裁切），超出时由 .edit-grid 滚动 */
   background: linear-gradient(180deg, #383c43, #33363b); /* 深灰渐变底 */
   border: 1px solid #3f434a; /* 描边 */
   border-radius: 8px; /* 圆角 */
-  padding: 6px 4px; /* 内边距 */
-  display: flex; /* 弹性布局（保证文字上下居中） */
-  align-items: center; /* 垂直居中 */
-  justify-content: center; /* 水平居中 */
+  padding: 5px 6px; /* 内边距（两行内容略紧凑） */
+  display: flex; /* 弹性布局 */
+  flex-direction: column; /* 纵向两行：按键名 + 当前映射 */
+  gap: 1px; /* 两行间距 */
+  align-items: center; /* 水平居中 */
+  justify-content: center; /* 垂直居中 */
   text-align: center; /* 文字居中（多行文本回退） */
   font-size: 12px; /* 字号 */
   color: #e8eaee; /* 文字颜色 */
@@ -632,6 +635,31 @@ body::before {
   transition: background 0.16s ease, border-color 0.16s ease, /* 背景/描边过渡 */
               transform 0.12s ease, box-shadow 0.16s ease; /* 位移/投影过渡 */
 }
+.pad-name {
+  display: block; /* 独占一行 */
+  max-width: 100%; /* 不超出按钮宽度 */
+  font-size: 12px; /* 按键名字号 */
+  line-height: 1.2; /* 紧凑行高 */
+  overflow: hidden; /* 超长裁剪 */
+  text-overflow: ellipsis; /* 省略号 */
+  white-space: nowrap; /* 不换行 */
+}
+.pad-line {
+  display: block; /* 独占一行 */
+  max-width: 100%; /* 不超出按钮宽度 */
+  font-size: 10px; /* 映射描述字号（弱化层级） */
+  line-height: 1.25; /* 紧凑行高 */
+  white-space: normal; /* 允许换行，保证映射内容完整显示（不用省略号） */
+  word-break: normal; /* 中文可换行，英文单词（如 Alt）保持完整不被拆开 */
+  overflow-wrap: break-word; /* 极长单词放不下时才强制断开，避免溢出 */
+}
+.pad-line.click { color: #7fc9c4; } /* 点击映射：青色 */
+.pad-line.long { color: #f0a34a; } /* 长按映射：橙色，与点击明显区分 */
+.pad-line.none { color: #6b7078; } /* 未映射：弱化灰色 */
+.pad-btn.sel .pad-line.click { color: #1f4b48; } /* 选中青色底：点击行用深青色保证可读 */
+.pad-btn.sel .pad-line.long { color: #6b4a12; } /* 选中青色底：长按行用深橙色 */
+.pad-btn.pressed:not(.sel) .pad-line.click { color: #23403a; } /* 物理按下橙色底：点击行用深绿色 */
+.pad-btn.pressed:not(.sel) .pad-line.long { color: #5a3a0d; } /* 物理按下橙色底：长按行用深棕色 */
 .pad-btn:hover {
   border-color: #7fc9c4; /* 悬停描边变青 */
   transform: translateX(2px); /* 悬停右移 */

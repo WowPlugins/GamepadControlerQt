@@ -235,13 +235,25 @@ function renderEdit(info, map) {
     sel.value = info.trigger_button || ''; // 同步选中项（无激活按钮时回到占位项）
   }
 
-  // 手柄按钮网格
-  $('edit-grid').innerHTML = info.buttons.map((b) => // 遍历所有手柄按键生成网格按钮
-    '<div class="pad-btn' + // 按键按钮基础样式
-    (b.name === selectedButton ? ' sel' : '') + // 选中的按键加 sel 高亮
-    (b.pressed && b.name !== selectedButton ? ' pressed' : '') + '" ' + // 物理按下的其他按键加 pressed 样式
-    'onclick="App.selectButton(' + q(b.name) + ')">' + esc(b.display) + '</div>' // 点击切换选中按键（单引号实参）
-  ).join('');
+  // 手柄按钮网格：每个格子显示「按键名 + 点击映射 + 长按映射」，
+  // 点击用青色、长按用橙色分别标注，未映射置灰；长文本自动换行，不省略
+  $('edit-grid').innerHTML = info.buttons.map((b) => { // 遍历所有手柄按键生成网格按钮
+    // 映射行：未映射显示灰色"未映射"；有长按动作时单独一行标注，与点击区分
+    // 打开「只切换层」时在对应行追加标记，便于一眼区分
+    let lines = b.desc
+      ? '<span class="pad-line click">点击: ' + esc(b.desc) + (b.click_layer_only ? '（只切层）' : '') + '</span>' // 点击/主动作
+      : '<span class="pad-line none">未映射</span>'; // 无映射
+    if (b.long_desc) { // 配置了长按动作
+      lines += '<span class="pad-line long">长按: ' + esc(b.long_desc) + (b.long_layer_only ? '（只切层）' : '') + '</span>'; // 长按动作单独一行
+    }
+    return '<div class="pad-btn' + // 按键按钮基础样式
+      (b.name === selectedButton ? ' sel' : '') + // 选中的按键加 sel 高亮
+      (b.pressed && b.name !== selectedButton ? ' pressed' : '') + '" ' + // 物理按下的其他按键加 pressed 样式
+      'onclick="App.selectButton(' + q(b.name) + ')">' + // 点击切换选中按键（单引号实参）
+      '<span class="pad-name">' + esc(b.display) + '</span>' + // 按键名
+      lines + // 点击/长按映射行
+      '</div>'; // 格子结束
+  }).join('');
 
   // 动作类型 chips
   $('edit-kinds').innerHTML = KINDS.map(([k, label]) => // 遍历动作类型生成 chip
