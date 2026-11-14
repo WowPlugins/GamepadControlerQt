@@ -82,6 +82,7 @@ const KINDS = [
   ['turnaround', '快速转身'], // 按下即按所选方向/幅度转动视角一次
   ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
   ['statemacro', '解锁右键+居中+按键'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
+  ['rightlooklock', '切换右键视角锁定'], // 按一次锁定右键（光标移出画面），再按一次解锁并居中光标
 ];
 
 // STATE_OPTIONS：可用的角色状态（与插件 SLState 的 STATE_DEFS 一致）
@@ -104,7 +105,7 @@ const MOUSE_BUTTONS = [
 ];
 
 // NO_TARGET_KINDS：无需选择额外目标的动作类型，选中即生效
-const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook', 'fastlook', 'toggleoverlayexpand'];
+const NO_TARGET_KINDS = ['none', 'wheelup', 'wheeldown', 'lookaround', 'mousemove', 'interactionkey', 'releasemousetoggle', 'swapmousetoggle', 'finelook', 'fastlook', 'toggleoverlayexpand', 'rightlooklock'];
 
 // ---------------------------------------------------------------------
 // 工具

@@ -54,6 +54,7 @@ const K_TYPE_TURN_AROUND: &str = "turnAround";
 const K_TYPE_TOGGLE_OVERLAY_EXPAND: &str = "toggleOverlayExpand";
 // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键
 const K_TYPE_STATE_MACRO: &str = "stateMacro";
+const K_TYPE_RIGHT_LOOK_LOCK: &str = "rightLookLock";
 
 // =====================================================================
 // 序列化：ControllerProfile -> JSON 文本
@@ -435,6 +436,7 @@ fn action_to_json(action: &MappedAction) -> Value {
         ActionType::TurnAround => json!({ "type": K_TYPE_TURN_AROUND, "pixels": action.key_code }),
         ActionType::ToggleOverlayExpand => json!({ "type": K_TYPE_TOGGLE_OVERLAY_EXPAND }),
         ActionType::StateMacro => json!({ "type": K_TYPE_STATE_MACRO, "keyCode": action.key_code }),
+        ActionType::RightLookLock => json!({ "type": K_TYPE_RIGHT_LOOK_LOCK }),
     }
 }
 
@@ -494,6 +496,7 @@ fn parse_action(obj: &Value) -> Option<MappedAction> {
         K_TYPE_STATE_MACRO => Some(MappedAction::state_macro(
             obj.get("keyCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
         )),
+        K_TYPE_RIGHT_LOOK_LOCK => Some(MappedAction::right_look_lock()),
         _ => None, // 未知类型
     }
 }

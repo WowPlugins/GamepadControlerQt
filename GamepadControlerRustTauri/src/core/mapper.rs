@@ -190,6 +190,8 @@ pub struct MapperState {
     pub extra_toggled: HashSet<MouseButton>,
     /// WASD 拦截自动锁定的鼠标右键
     pub auto_locked_right: bool,
+    /// 快捷键切换的右键视角锁定（锁定：光标移出画面 + 按住右键；再按一次解锁）
+    pub right_look_locked: bool,
     /// 待判定的长按：触发源 -> 长按信息
     pub pending_long_press: HashMap<TriggerId, PendingLongPress>,
     /// 已触发长按的触发源（松开时按长按动作释放）
@@ -250,6 +252,7 @@ impl MapperState {
         self.extra_toggled.clear(); // 清空无来源锁存（注入器已统一松开）
         self.pressed_mouse_layer.clear(); // 清空鼠标单击来源层记录
         self.auto_locked_right = false; // 清除自动锁定标记
+        self.right_look_locked = false; // 清除快捷键右键视角锁定标记
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
         self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
@@ -365,6 +368,7 @@ impl MapperState {
             || !self.toggled_mouse_buttons.is_empty() // 有鼠标锁存
             || !self.extra_toggled.is_empty() // 有交换产生的鼠标锁存
             || self.auto_locked_right // WASD 自动锁定右键
+            || self.right_look_locked // 快捷键切换的右键视角锁定
             || !self.left_stick_pressed_keys.is_empty() // 摇杆方向键按下
     } // 结束 has_pressed_injection 函数
 
@@ -593,6 +597,7 @@ impl MapperState {
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
                 self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);
             }
+            ActionType::RightLookLock => self.handle_right_look_lock(injector, event_tx, wow_exe), // 切换右键视角锁定
             ActionType::SwitchLayerAndKey => { // 切层+按键：层已由 SteamInput 激活，此处只注入组合键
                 if action.key_code != 0 { // 未选按键（0）时只切层，不注入
                     self.handle_keyboard_key(button, action.key_code, subs, false, injector); // 切层键自身不掩蔽
@@ -809,6 +814,11 @@ impl MapperState {
             self.release_auto_right_lock(injector); // 释放 WASD 拦截自动锁定的右键
             released = true;
         }
+        if self.right_look_locked {
+            self.right_look_locked = false; // 清除快捷键右键锁定标记
+            injector.send_mouse_up(MouseButton::Right); // 松开快捷键锁定的右键
+            released = true;
+        }
         if released {
             thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 等游戏处理抬起事件
         }
@@ -832,6 +842,74 @@ impl MapperState {
             self.handle_keyboard_key(button, key_code, subs, false, injector); // 状态宏内部组合键不掩蔽
         }
     } // 结束 handle_state_macro 函数
+
+    // -----------------------------------------------------------------
+    // 切换右键视角锁定（快捷键）
+    // -----------------------------------------------------------------
+    /// 切换鼠标右键视角锁定：
+    ///   - 未锁定：光标移到屏幕左下角之外，按下右键（进入视角锁定）
+    ///   - 已锁定：松开右键，等待 UNLOCK_SETTLE_MS 让游戏退出 mouselook，再把光标移到画面中央
+    ///   - 左键锁存中：不执行任何动作（映射按键本身已在上层被吞掉，不会穿透到游戏）
+    fn handle_right_look_lock(
+        &mut self,
+        injector: &InputInjector,
+        event_tx: &Sender<UiEvent>,
+        wow_exe: &str, // 目标游戏 exe（解锁后居中按游戏客户区计算）
+    ) {
+        if self.is_mouse_locked(MouseButton::Right) { // 已锁定 -> 解锁
+            self.unlock_right_look(injector, event_tx, wow_exe);
+            return; // 解锁后结束
+        }
+        if self.is_mouse_locked(MouseButton::Left) { // 左键锁存中：不执行任何动作
+            crate::dbg_log!("切换右键锁定：左键锁存中，忽略本次按键");
+            return; // 直接返回（按键已被映射层吞掉，不会穿透到游戏）
+        }
+        // 光标先移到屏幕外左下角（越界坐标会被系统钳制到屏幕边缘），再按下右键；
+        // 作用是把光标挪出游戏画面，避免右键拖拽时光标乱跑。
+        let (sw, sh) = injector.screen_size();
+        injector.set_cursor_pos(-(sw * 2 / 3), sh + sh * 2 / 3);
+        // 先无条件松开一次再按下，保证产生一个干净的「按下沿」
+        self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
+        injector.force_mouse_up(MouseButton::Right);
+        injector.send_mouse_down(MouseButton::Right); // 锁定鼠标右键
+        self.right_look_locked = true;
+        crate::dbg_log!("切换右键锁定：锁定（光标移出画面左下角）");
+    } // 结束 handle_right_look_lock 函数
+
+    /// 解除全部右键锁存来源，等待游戏退出 mouselook，再把光标移到画面中央。
+    fn unlock_right_look(
+        &mut self,
+        injector: &InputInjector,
+        event_tx: &Sender<UiEvent>,
+        wow_exe: &str,
+    ) {
+        // 由手柄按钮建立的右键长按锁存：移除记录并通知 UI 解除提示
+        let toggled: Vec<TriggerId> = self
+            .toggled_mouse_buttons
+            .iter()
+            .filter(|(_, mb)| **mb == MouseButton::Right)
+            .map(|(b, _)| *b)
+            .collect();
+        for button in toggled {
+            self.toggled_mouse_buttons.remove(&button);
+            self.toggled_mouse_layer.remove(&button);
+            let _ = event_tx.send(UiEvent::MouseToggleChanged {
+                button,
+                mb: MouseButton::Right,
+                active: false,
+            });
+        }
+        self.extra_toggled.remove(&MouseButton::Right); // 交换产生的右键锁存
+        self.auto_locked_right = false; // WASD 自动锁定标记
+        self.right_look_locked = false; // 快捷键锁定标记
+        self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
+        injector.send_mouse_up(MouseButton::Right); // 松开右键（记录未按下时无副作用）
+        // 等待游戏处理右键抬起并退出 mouselook，再移动光标
+        thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS));
+        let (cx, cy) = self.target_center(wow_exe, injector);
+        injector.move_cursor_absolute(cx, cy); // 光标移到画面中央（SendInput 绝对移动，游戏可感知）
+        crate::dbg_log!("切换右键锁定：解锁，光标移到({},{})", cx, cy);
+    } // 结束 unlock_right_look 函数
 
     // -----------------------------------------------------------------
     // 需求1：交互键
@@ -905,6 +983,11 @@ impl MapperState {
         }
         released |= self.auto_locked_right; // WASD 拦截自动锁定的右键也算释放
         self.release_auto_right_lock(injector); // 释放 WASD 拦截自动锁定的右键
+        if self.right_look_locked {
+            self.right_look_locked = false; // 清除快捷键右键锁定标记
+            injector.send_mouse_up(MouseButton::Right); // 松开快捷键锁定的右键
+            released = true; // 有锁存被释放
+        }
         if released {
             thread::sleep(Duration::from_millis(UNLOCK_SETTLE_MS)); // 解锁后等待，让游戏先处理抬起事件
         }
@@ -950,6 +1033,10 @@ impl MapperState {
             injector.send_mouse_up(mb);
         }
         self.release_auto_right_lock(injector);
+        if self.right_look_locked {
+            injector.send_mouse_up(MouseButton::Right); // 松开快捷键锁定的右键
+            self.right_look_locked = false; // 清除快捷键右键锁定标记
+        }
 
         // 3) 按「交换后的状态」重新锁存：左 <-> 右
         if right_locked {
@@ -979,8 +1066,8 @@ impl MapperState {
 
     /// 判断某个鼠标键当前是否处于锁存状态（左右键都需要判断）
     fn is_mouse_locked(&self, mb: MouseButton) -> bool {
-        if mb == MouseButton::Right && self.auto_locked_right {
-            return true; // WASD 拦截自动锁定的右键
+        if mb == MouseButton::Right && (self.auto_locked_right || self.right_look_locked) {
+            return true; // WASD 自动锁定 / 快捷键锁定的右键
         }
         if self.extra_toggled.contains(&mb) {
             return true; // 交换左右键后产生的无来源锁存

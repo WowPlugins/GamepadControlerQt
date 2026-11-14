@@ -265,6 +265,7 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
         ActionType::TurnAround => format!("快速转身 {}°", a.key_code.abs() * 90 / 400), // 快速转身角度
         ActionType::ToggleOverlayExpand => "切换悬浮窗展开/收起".to_string(), // 悬浮窗展开状态切换
         ActionType::StateMacro => format!("解锁右键+居中+按键: {}", key_code_to_name(a.key_code)), // 解锁+居中+发送组合键
+        ActionType::RightLookLock => "切换右键视角锁定".to_string(), // 切换右键视角锁定（锁定/解锁）
         _ => "（未知）".to_string(), // 【Rust 语法】通配符 _ 分支：兜底匹配所有未列出的枚举值
     } // match 结束
 } // 函数结束
@@ -288,6 +289,7 @@ fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供�
         ActionType::TurnAround => "turnaround", // 快速转身
         ActionType::ToggleOverlayExpand => "toggleoverlayexpand", // 切换悬浮窗展开/收起
         ActionType::StateMacro => "statemacro", // 状态宏
+        ActionType::RightLookLock => "rightlooklock", // 切换右键视角锁定
         _ => "keyboard", // 未知类型兜底为 keyboard
     } // match 结束
     .to_string() // 把匹配出的 &str 转为 String（match 是表达式，可直接接方法）
@@ -327,6 +329,7 @@ fn build_action(
         "turnaround" => Some(MappedAction::turn_around(key_code.filter(|v| *v != 0).unwrap_or(800))),
         "toggleoverlayexpand" => Some(MappedAction::toggle_overlay_expand()), // 切换悬浮窗展开/收起
         "statemacro" => Some(MappedAction::state_macro(key_code.unwrap_or(0))), // 状态宏：未选键时先建空动作，选键后再更新
+        "rightlooklock" => Some(MappedAction::right_look_lock()), // 切换右键视角锁定
         _ => None, // 未知类型不生成动作
     } // match 结束
 } // 函数结束

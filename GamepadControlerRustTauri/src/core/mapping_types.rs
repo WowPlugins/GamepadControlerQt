@@ -49,6 +49,7 @@ pub enum ActionType {
     TurnAround, // 快速转身（按下即执行一次相对鼠标移动，key_code 存有符号像素：正=右，负=左）
     ToggleOverlayExpand, // 切换悬浮窗展开/收起状态
     StateMacro, // 状态宏：解锁鼠标锁存 -> 光标居中 -> 发送组合键（受状态条件约束）
+    RightLookLock, // 切换鼠标右键视角锁定（锁定：光标移出画面左下角并按住右键；解锁：松开右键、等待退出 mouselook、光标居中）
 } // 结束 ActionType 枚举定义
 
 // ---------------------------------------------------------------------
@@ -256,6 +257,15 @@ impl MappedAction {
             layer_name: None,
         }
     }
+    /// 构造"切换右键视角锁定"动作：按一次锁定右键，再按一次解锁。
+    pub fn right_look_lock() -> Self {
+        Self {
+            r#type: ActionType::RightLookLock, // 动作类型设为切换右键视角锁定
+            key_code: 0, // 不使用键盘键码
+            mouse_button: MouseButton::Right, // 固定操作右键
+            layer_name: None, // 无层切换
+        }
+    }
     /// 构造状态宏动作：code 为最终要发送的主键（子命令作为组合键修饰）
     pub fn state_macro(code: i32) -> Self {
         Self {
@@ -385,6 +395,7 @@ impl KeyMapping {
             }
             ActionType::ToggleOverlayExpand => parts.push("切换悬浮窗展开".to_string()), // 切换悬浮窗展开/收起描述
             ActionType::StateMacro => parts.push(format!("解锁右键+居中+按键 {}", key_code_to_name(self.action.key_code))), // 解锁+居中+发送组合键
+            ActionType::RightLookLock => parts.push("切换右键视角锁定".to_string()), // 切换右键视角锁定描述
         } // 结束 match 表达式
         // 【Rust 语法】for ... in 循环：`&self.sub_commands` 是对数组的不可变借用（不转移所有权），每次迭代 `sub` 绑定为元素引用 &i32。
         for sub in &self.sub_commands {
