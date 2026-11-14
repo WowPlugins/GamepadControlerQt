@@ -297,7 +297,7 @@ pub struct KeyMapping {
     pub long_press: Option<MappedAction>,
     /// 长按动作的子命令
     pub long_press_subs: Vec<i32>,
-    /// 长按判定阈值（毫秒），默认 500
+    /// 长按判定阈值（毫秒），默认 200
     pub long_press_ms: u32,
     /// 状态条件：满足后才执行本次映射（为空表示无约束，始终生效）
     pub state_conditions: Vec<StateCond>,
@@ -331,7 +331,7 @@ impl KeyMapping {
     // 【Rust 语法】关联常量：与类型绑定、不属于某个实例的常量，通过 `KeyMapping::MAX_SUB_COMMANDS` 访问。
     pub const MAX_SUB_COMMANDS: usize = 3;
     /// 长按判定默认阈值（毫秒）
-    pub const DEFAULT_LONG_PRESS_MS: u32 = 500;
+    pub const DEFAULT_LONG_PRESS_MS: u32 = 200;
 
     /// 构造一条只有主动作的映射
     pub fn new(action: MappedAction) -> Self {

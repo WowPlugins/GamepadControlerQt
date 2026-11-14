@@ -133,7 +133,7 @@ let editLayerId = decodeURIComponent(location.hash.replace(/^#/, '')) || 'Common
 let selectedButton = 'A'; // 当前选中的手柄按键
 let editKind = 'none'; // 当前选中的动作类型（无映射时为"未设置"）
 let editLongKind = null; // 当前选中的长按动作类型（null = 未配置长按）
-let currentLongPressMs = 500; // 当前按键的长按判定阈值（毫秒，用于加减按钮）
+let currentLongPressMs = 200; // 当前按键的长按判定阈值（毫秒，用于加减按钮）
 let prevEdit = null; // 上一次渲染内容对比串，避免重复渲染
 let prevSelectKey = null; // 上一次「激活按钮」下拉框内容指纹，避免重建 DOM 把展开中的下拉框重置
 let renameLayerMode = false; // 是否正在重命名操作集
@@ -352,7 +352,7 @@ function renderLongPress(info, map) {
       '长按子命令（最多3个，当前: ' + (lp.subs.length ? lp.subs.join(' + ') : '无子命令') + '）';
   }
 
-  currentLongPressMs = map.long_press_ms || 500; // 记录当前阈值，供加减按钮计算
+  currentLongPressMs = map.long_press_ms || 200; // 记录当前阈值，供加减按钮计算
   currentLongKeyCode = (lp && lp.key_code) || 0; // 记录长按动作键码（切换长按类型时沿用）
   currentLongMouse = (lp && lp.mouse_button) || 'LEFT'; // 记录长按鼠标键（切换长按类型时沿用）
   $('edit-long-ms').textContent = currentLongPressMs + 'ms'; // 显示长按阈值
