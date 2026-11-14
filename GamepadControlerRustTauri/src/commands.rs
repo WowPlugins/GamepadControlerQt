@@ -270,6 +270,16 @@ fn describe_action(a: &MappedAction) -> String { // 把映射动作转成人类�
     } // match 结束
 } // 函数结束
 
+// 动作描述 + 修饰键子命令（悬浮窗「按下按键」chip 用，避免组合键显示不全）
+fn describe_action_with_subs(a: &MappedAction, subs: &[i32]) -> String {
+    let mut s = describe_action(a); // 基础动作描述
+    for sub in subs { // 逐个追加修饰键，格式与 KeyMapping::describe 的 + 连接一致
+        s.push('+');
+        s.push_str(&key_code_to_name(*sub));
+    }
+    s
+}
+
 fn kind_str(a: &MappedAction) -> String { // 返回动作类型字符串，供前端区分渲染方式
     match a.r#type { // 按动作类型匹配
         ActionType::KeyboardKey => "keyboard", // 键盘键
@@ -434,10 +444,10 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
                 .map(|m| {
                     if triggered_long {
                         if let Some(lp) = &m.long_press {
-                            return describe_action(lp); // 长按已生效：显示长按动作
+                            return describe_action(lp); // 长按已生效：显示长按动作（长按无子命令）
                         }
                     }
-                    describe_action(&m.action) // 未配置长按或尚未触发：显示主动作
+                    describe_action_with_subs(&m.action, &m.sub_commands) // 未配置长按或尚未触发：显示主动作（含修饰键）
                 })
                 .unwrap_or_else(|| "（无映射）".to_string()); // 该按钮在公共层也无映射
             PressedRow {

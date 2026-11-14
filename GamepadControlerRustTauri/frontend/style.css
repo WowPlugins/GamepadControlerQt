@@ -795,18 +795,51 @@ html.overlay-html {
   margin: 0; /* 铺满窗口（与 body 同界） */
   display: flex; /* 弹性布局 */
   flex-direction: column; /* 垂直排列 */
-  gap: 8px; /* 间距 */
-  padding: 10px 12px; /* 内边距 */
+  gap: 6px; /* 间距（收紧，缩小收起高度） */
+  padding: 8px 10px; /* 内边距（收紧） */
   background: rgba(43, 45, 49, 0.85); /* 半透明深灰底（透明度由 JS 动态覆盖） */
+  border: 1px solid #3a3f46; /* 默认边框：深灰（锁定状态改为橙色） */
   border-radius: 8px; /* 内衬圆角（与 shell 一致，深色区域统一） */
   height: auto; /* 高度随内容自适应 */
   overflow: hidden; /* 隐藏溢出 */
+  transition: border-color 0.16s ease; /* 锁定状态切换时边框颜色平滑过渡 */
   /* 不用外部 box-shadow：外阴影模糊扩散会形成比卡片更平缓的第二条弧线，
      导致"外层弧"与卡片圆角弧度不一致；改用 inset 内阴影，只向内不产生外轮廓 */
   box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.12); /* 内阴影：轻微层次感，无外层弧 */
 }
 .overlay-card.mouse-toggle {
+  border-color: #f0a34a; /* 鼠标锁存中：橙色边框（收起态也能直接看出锁定状态） */
   box-shadow: inset 0 0 12px rgba(240, 163, 74, 0.25); /* 锁存时橙色内光晕（向内，无外层弧） */
+}
+
+/* 收起态：迷你圆角矩形（仅保留连接圆点 + 当前层名，锁定状态看边框颜色） */
+.overlay-card.collapsed {
+  padding: 6px 10px; /* 收紧内边距 */
+  gap: 0; /* 仅一行内容，无需间距 */
+}
+.overlay-mini {
+  display: none; /* 默认隐藏（仅收起态显示） */
+  flex-direction: row; /* 水平排列 */
+  align-items: center; /* 垂直居中 */
+  gap: 6px; /* 圆点与文字间距 */
+  height: 20px; /* 固定行高：迷你条高度恒定 */
+  cursor: pointer; /* 手型光标（单击展开 / 长按打开应用） */
+  user-select: none; /* 禁止选中文本 */
+}
+.overlay-card.collapsed .overlay-mini { display: flex; } /* 收起态显示迷你条 */
+/* 收起态隐藏展开态的其余内容（!important 覆盖 render 写入的内联 display） */
+.overlay-card.collapsed .overlay-title,
+.overlay-card.collapsed .overlay-row,
+.overlay-card.collapsed .overlay-pressed,
+.overlay-card.collapsed #ov-warn,
+.overlay-card.collapsed #ov-mappings { display: none !important; }
+.ov-mini-text {
+  color: #e8eaee; /* 与层名同色 */
+  font-size: 12px; /* 紧凑字号 */
+  white-space: nowrap; /* 不换行 */
+  overflow: hidden; /* 超长裁剪 */
+  text-overflow: ellipsis; /* 超长省略 */
+  min-width: 0; /* 允许收缩 */
 }
 
 .overlay-title {
@@ -820,8 +853,8 @@ html.overlay-html {
   /* 不设 overflow:hidden：否则会裁剪按钮 hover 上浮的顶部 1px；
      按钮文字换行已由 nowrap + flex-shrink:0 解决 */
 }
-.ov-set { font-size: 15px; color: #7fc9c4; font-weight: 600; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; } /* 操作集名：青色加粗，过长可收缩省略 */
-.ov-layer { font-size: 15px; color: #e8eaee; white-space: nowrap; flex-shrink: 0; } /* 当前层名：不收缩 */
+.ov-set { font-size: 13px; color: #7fc9c4; font-weight: 600; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; } /* 操作集名：青色加粗，过长可收缩省略 */
+.ov-layer { font-size: 13px; color: #e8eaee; white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; } /* 当前层名：窄窗口下可收缩省略 */
 .ov-toggle {
   /* margin-left: auto; 靠右对齐 */
   background: #33363b; /* 深灰底 */

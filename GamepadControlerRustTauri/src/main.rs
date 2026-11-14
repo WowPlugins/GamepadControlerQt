@@ -180,7 +180,7 @@ fn main() { // 程序主入口
                 tauri::WebviewUrl::App("overlay.html".into()), // 加载前端打包资源中的 overlay.html
             ) // WebviewWindowBuilder::new 调用结束
             .title("手柄悬浮窗") // 设置窗口标题
-            .inner_size(340.0, 220.0) // 设置窗口内部尺寸为 320x220
+            .inner_size(160.0, 40.0) // 初始尺寸（收起态迷你圆角矩形，前端 fitSize 会精确贴合）
             .resizable(false) // 禁止窗口缩放
             .decorations(false) // 无系统边框与标题栏
             .transparent(true) // 启用窗口透明背景

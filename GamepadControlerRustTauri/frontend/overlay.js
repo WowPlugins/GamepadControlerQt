@@ -15,13 +15,15 @@ const { getCurrentWindow, LogicalSize } = window.__TAURI__.window;
 let expanded = false; // 悬浮窗是否处于展开状态
 let prevKey = null; // 上一次渲染内容对比串，避免重复渲染
 let lastFitH = 0; // 上次贴合高度，高度没变就不 setSize，避免频繁调整
-let animating = false; // 展开/收起高度动画进行中，fitHeight 跳过避免干扰分步生长
+let lastFitW = 0; // 上次贴合宽度（收起/展开宽度不同）
+let animating = false; // 展开/收起尺寸动画进行中，fitSize 跳过避免干扰分步生长
 let collapsing = false; // 收起动画中：映射区由 setExpanded 控制 display，render 跳过避免截断淡出
 let lastExpandRev = null; // 上次已处理的「切换展开」计数（手柄触发时后端递增，前端据此翻转）
 
-const MIN_H = 60;  // 收起最小高度（防御下限；实际由 fitHeight 精确贴合卡片，四边透明带均为 4px）
+const MIN_H = 24;  // 收起最小高度（防御下限；实际由 fitSize 精确贴合迷你卡片）
 const MAX_H = 900; // 展开最大高度（内容完整显示的防御上限；悬浮窗高度随内容自适应，不裁剪）
-const W = 340;     // 悬浮窗固定宽度
+const W = 300;     // 展开态宽度
+const MINI_W = 160; // 收起态宽度（迷你圆角矩形）
 
 // ---------------------------------------------------------------------
 // 工具
@@ -88,7 +90,9 @@ function render(snap) {
   // 连接状态
   const dotCls = 'dot ' + (snap.connected ? 'ok' : 'off'); // 状态圆点类名
   if ($('ov-dot').className !== dotCls) $('ov-dot').className = dotCls; // 有变化才改
+  if ($('ov-mini-dot').className !== dotCls) $('ov-mini-dot').className = dotCls; // 迷你条连接圆点同步
   setText('ov-conn', snap.connected ? '手柄已连接' : '手柄未连接'); // 连接状态文字
+  setText('ov-mini-text', snap.layer_name || snap.set_name || '--'); // 迷你条显示当前层名（无层名时退回操作集名）
 
   // 按下按键（仅按键内容变化才重建 chips）：显示「按键名 → 映射功能」，收起状态也能看到功能
   const pressedRows = snap.pressed_rows || []; // 按下的按钮 + 映射描述（后端提供）
@@ -110,7 +114,9 @@ function render(snap) {
   setHTML('ov-warn', mouseToggle // 锁存时橙色警示条，平时弱化占位（高度恒定，避免悬浮窗抖动）
     ? '<div class="overlay-warn">⚠ ' + esc(warnText) + '</div>'
     : '<span class="overlay-dim">长按锁存: 无</span>');
-  $('overlay-card').classList.toggle('mouse-toggle', mouseToggle); // 切换卡片橙色内光晕样式
+  $('overlay-card').classList.toggle('mouse-toggle', mouseToggle); // 切换卡片橙色边框/内光晕样式（锁定状态）
+  // 收起态隐藏锁存文字行（锁定状态改由边框颜色表示），展开态才显示文字警示
+  setStyle('ov-warn', 'display', expanded ? 'flex' : 'none');
 
   // 卡片背景透明度跟随设置（透明度越低越透明，配合透明窗口）
   const op = typeof snap.opacity === 'number' ? snap.opacity : 0.85; // 取快照中的透明度，缺省 0.85
@@ -138,30 +144,34 @@ function render(snap) {
       ? '<span class="overlay-faint">（无映射）</span>'
       : rows.join(''));
   }
-  fitHeight(); // 内容变化后贴合窗口高度（有守卫，高度没变不会重复 setSize）
+  fitSize(); // 内容变化后贴合窗口宽高（有守卫，尺寸没变不会重复 setSize）
 }
 
-async function fitHeight() {
+// 贴合窗口宽高：展开态用宽尺寸、收起态用迷你宽度，高度始终贴合卡片
+async function fitSize() {
   if (animating) return; // 展开/收起高度动画进行中，跳过避免干扰分步生长
   await new Promise((r) => requestAnimationFrame(r)); // 等布局完成再测量
   const card = $('overlay-card');
   // 窗口高度贴合卡片高度（无 shell 边距补偿，卡片铺满窗口）
-  const h = card.offsetHeight;
-  const target = Math.max(MIN_H, Math.min(h, MAX_H)); // 夹在上下限之间
-  if (target === lastFitH) return; // 高度没变则跳过
-  lastFitH = target;               // 记录本次高度
-  await getCurrentWindow().setSize(new LogicalSize(W, target));
+  const h = Math.max(MIN_H, Math.min(card.offsetHeight, MAX_H)); // 夹在上下限之间
+  const w = expanded ? W : MINI_W; // 展开/收起宽度
+  if (h === lastFitH && w === lastFitW) return; // 尺寸没变则跳过
+  lastFitH = h;             // 记录本次高度
+  lastFitW = w;             // 记录本次宽度
+  await getCurrentWindow().setSize(new LogicalSize(w, h));
 }
 
-// 分步调整窗口高度到目标高度：平滑"生长/收缩"动画（多帧 setSize + 缓动）。
-// 未传 targetArg 时按当前内容高度计算（展开用）；传了则用传入值（收起用收缩目标）
-async function animateHeight(targetArg) {
+// 分步调整窗口宽高到目标尺寸：平滑"生长/收缩"动画（多帧 setSize + 缓动）。
+// 未传 targetArg 时按当前内容高度计算（展开用）；传了则用传入值（收起用收缩目标）。
+// targetW 未传时按展开状态取宽度（展开 W / 收起 MINI_W）。
+async function animateHeight(targetArg, targetW) {
   await new Promise((r) => requestAnimationFrame(r)); // 等布局完成再测量
   const card = $('overlay-card');
   const target = targetArg != null // 目标高度：传入值优先，否则按当前内容高度
     ? targetArg
     : Math.max(MIN_H, Math.min(card.offsetHeight, MAX_H)); // 夹在上下限（贴合卡片，无 shell 边距）
-  if (target === lastFitH) return; // 高度没变则跳过
+  const targetWv = targetW != null ? targetW : (expanded ? W : MINI_W); // 目标宽度
+  if (target === lastFitH && targetWv === lastFitW) return; // 尺寸没变则跳过
   const from = lastFitH > 0 ? lastFitH : target; // 首帧无基线则直接用目标（避免从 0 生长）
   const win = getCurrentWindow(); // 窗口句柄
   const steps = 4; // 分步数：4 帧约 70ms 的快速平滑过渡（步数过多会拖慢且不流畅）
@@ -170,10 +180,12 @@ async function animateHeight(targetArg) {
     const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad 缓动
     const h = Math.round(from + (target - from) * eased); // 当前帧高度
     lastFitH = h; // 记录中间高度（供守卫对比）
-    await win.setSize(new LogicalSize(W, h)); // 调整窗口高度
+    lastFitW = targetWv; // 记录目标宽度
+    await win.setSize(new LogicalSize(targetWv, h)); // 调整窗口宽高
     await new Promise((r) => setTimeout(r, 16)); // 帧间隔
   }
   lastFitH = target; // 最终精确到位
+  lastFitW = targetWv; // 最终宽度到位
 }
 
 // ---------------------------------------------------------------------
@@ -182,10 +194,12 @@ async function animateHeight(targetArg) {
 async function setExpanded(v) {
   expanded = v;             // 更新展开状态
   prevKey = null;           // 强制重绘
-  animating = true;         // 展开/收起全程禁止 fitHeight 干预（render 内会调用）
+  animating = true;         // 展开/收起全程禁止 fitSize 干预（render 内会调用）
   try {
     if (v) {
-      // 展开：映射区恢复文档流并显示，先透明+下移+微缩占位 → 窗口分步生长 → 淡入滑入归位
+      // 展开：恢复完整布局 -> 映射区透明占位 -> 窗口分步生长 -> 淡入滑入归位
+      $('overlay-card').classList.remove('collapsed'); // 恢复完整布局（迷你条隐藏）
+      $('ov-warn').style.display = 'flex'; // 恢复锁存文字行（参与高度计算）
       $('ov-mappings').style.display = 'flex'; // 显示（文档流，撑高卡片参与布局）
       $('ov-mappings').style.opacity = '0'; // 透明占位
       $('ov-mappings').style.transform = 'translateY(10px) scale(0.98)'; // 起始下移微缩
@@ -199,25 +213,22 @@ async function setExpanded(v) {
         $('ov-mappings').style.transform = 'translateY(0) scale(1)'; // 上移归位、还原缩放
       });
     } else {
-      // 收起：映射区淡出滑出（仍占位，位置不跳动）→ 窗口收缩到收起高度 →
-      //       然后隐藏映射区。关键：先收缩再隐藏，收缩期间窗口 ≤ 内容高度，
-      //       底部是被裁剪（body 圆角内）而不是露出透明，整体颜色不变
+      // 收起：映射区淡出滑出 → 切换为迷你布局 → 窗口收缩为迷你圆角矩形
       collapsing = true; // 收起动画中：禁止 render 把映射区 display 设 none（否则淡出被截断）
+      $('ov-warn').style.display = 'none'; // 锁存文字行收起（锁定状态由边框颜色表示）
       $('ov-mappings').style.opacity = '0'; // 淡出
       $('ov-mappings').style.transform = 'translateY(10px) scale(0.98)'; // 下移微缩滑出
       await new Promise((r) => setTimeout(r, 200)); // 等淡出/滑出过渡完成（0.2s）
-      // 计算收起目标高度：当前（展开）卡片高度 - 映射区高度 - 映射区前一个 gap（card gap 8px）
-      const card = $('overlay-card');
-      const mapping = $('ov-mappings');
-      const collapseH = Math.max(MIN_H, Math.min(card.offsetHeight - mapping.offsetHeight - 8, MAX_H));
-      await animateHeight(collapseH); // 先收缩窗口（映射区仍占位，底部内容被裁剪，不露透明）
-      $('ov-mappings').style.display = 'none'; // 收缩完成，隐藏映射区
+      $('overlay-card').classList.add('collapsed'); // 切换迷你布局（卡片立即收紧为一行）
+      $('ov-mappings').style.display = 'none'; // 隐藏映射区
       $('ov-mappings').style.opacity = ''; // 清理内联透明度（恢复 CSS 默认，下次展开重新设置）
       $('ov-mappings').style.transform = ''; // 清理位移/缩放
       collapsing = false; // 恢复 render 对 display 的控制
+      const miniH = Math.max(MIN_H, $('overlay-card').offsetHeight); // 迷你卡片实际高度
+      await animateHeight(miniH, MINI_W); // 窗口宽高收缩到迷你尺寸
     }
   } finally {
-    animating = false;      // 动画结束，恢复 fitHeight 自动贴合
+    animating = false;      // 动画结束，恢复 fitSize 自动贴合
   }
 }
 
@@ -232,6 +243,26 @@ $('ov-toggle').addEventListener('click', (e) => { // 展开/收起按钮
 $('ov-title').addEventListener('click', (e) => { // 标题行点击
   if (e.target === $('ov-toggle')) return; // 点的是展开按钮则跳过（避免重复）
   setExpanded(!expanded); // 切换展开状态
+});
+
+// 收起态迷你条：单击展开；拖动窗口时不触发展开
+let miniDownX = 0; // 按下起点 X
+let miniDownY = 0; // 按下起点 Y
+let miniMoved = false; // 是否已判定为拖动窗口
+
+$('ov-mini').addEventListener('mousedown', (e) => { // 按下
+  if (e.button !== 0 || expanded) return; // 仅收起态左键
+  miniMoved = false; // 重置拖动标记
+  miniDownX = e.screenX; // 记录按下起点
+  miniDownY = e.screenY;
+});
+$('ov-mini').addEventListener('mousemove', (e) => { // 移动
+  if (Math.abs(e.screenX - miniDownX) > 5 || Math.abs(e.screenY - miniDownY) > 5) { // 超过阈值视为拖动
+    miniMoved = true; // 标记为拖动：松开时不展开
+  }
+});
+$('ov-mini').addEventListener('mouseup', () => { // 松开
+  if (!miniMoved && !expanded) setExpanded(true); // 单击：展开
 });
 
 $('openApp').addEventListener('click', (e) => {

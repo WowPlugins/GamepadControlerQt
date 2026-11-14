@@ -7,7 +7,12 @@
   <link rel="stylesheet" href="style.css" /> <!-- 引入全局样式表 -->
 </head>
 <body class="overlay-body"> <!-- overlay-body 类使 body 透明（配合透明窗口） -->
-  <div class="overlay-card" id="overlay-card"> <!-- 悬浮窗卡片：铺满窗口，圆角 8px 由 body 统一裁剪 -->
+  <div class="overlay-card collapsed" id="overlay-card"> <!-- 悬浮窗卡片：铺满窗口，圆角 8px 由 body 统一裁剪；默认收起（迷你圆角矩形） -->
+    <!-- 收起态迷你条：圆点=连接状态，文本=当前层；边框颜色表示鼠标锁定状态 -->
+    <div class="overlay-mini" id="ov-mini" data-tauri-drag-region> <!-- 迷你条（可拖动；单击展开） -->
+      <span class="dot" id="ov-mini-dot"></span> <!-- 连接状态圆点 -->
+      <span class="ov-mini-text" id="ov-mini-text">--</span> <!-- 当前层名称 -->
+    </div>
     <!-- 标题行：点击或拖动；data-tauri-drag-region 允许拖动窗口 -->
     <div class="overlay-title" id="ov-title" data-tauri-drag-region> <!-- 标题行（可拖动窗口，点击切换展开） -->
       <span class="ov-set" id="ov-set">操作集: --</span> <!-- 当前操作集名称（overlay.js 动态刷新） -->
