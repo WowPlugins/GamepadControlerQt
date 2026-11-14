@@ -62,27 +62,27 @@ const SUB_COMMAND_KEYS = [
   [137, 'F7'], [138, 'F8'], [139, 'F9'], [140, 'F10'], [141, 'F11'], [142, 'F12'],
 ];
 
-// KINDS：动作类型列表，[后端枚举名, 中文显示名]
+// KINDS：动作类型列表，[后端枚举名, 中文显示名, 悬浮说明]
 const KINDS = [
-  ['none', '未设置'], // 未设置：清除该按键的映射（含长按）
-  ['keyboard', '键盘'], // 键盘按键
-  ['mouse', '鼠标点击'], // 鼠标点击
-  ['mousetoggle', '鼠标长按'], // 鼠标长按锁存
-  ['wheelup', '滚轮上'], // 鼠标滚轮上滚
-  ['wheeldown', '滚轮下'], // 鼠标滚轮下滚
-  ['switchlayer', '切层'], // 切换层
-  ['switchlayerandkey', '切层+按键'], // 切层同时按下组合键（松开一并释放）
-  ['lookaround', '视角控制'], // 右摇杆视角控制
-  ['mousemove', '鼠标移动'], // 鼠标移动
-  ['interactionkey', '交互键'], // 交互键：临时解锁锁存，屏幕中央左右键各点一次
-  ['releasemousetoggle', '释放鼠标锁存'], // 释放鼠标左右键长按锁存
-  ['swapmousetoggle', '交换左右键锁存'], // 交换鼠标左右键长按锁存
-  ['finelook', '鼠标精细移动'], // 按住时右摇杆低灵敏度
-  ['fastlook', '鼠标快速移动'], // 按住时右摇杆高灵敏度
-  ['turnaround', '快速转身'], // 按下即按所选方向/幅度转动视角一次
-  ['toggleoverlayexpand', '悬浮窗展开/收起'], // 切换悬浮窗展开状态
-  ['statemacro', '解锁右键+居中+按键'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
-  ['rightlooklock', '切换右键视角锁定'], // 按一次锁定右键（光标移出画面），再按一次解锁并居中光标
+  ['none', '未设置', '清除该按键的映射（含长按动作）'], // 未设置：清除该按键的映射（含长按）
+  ['keyboard', '键盘', '按下触发时发送该按键并保持，松开时释放；可叠加子命令组成组合键'], // 键盘按键
+  ['mouse', '鼠标点击', '按下时按下该鼠标键，松开时释放（适合开火、右键等）'], // 鼠标点击
+  ['mousetoggle', '鼠标长按', '按一次按下并锁存该鼠标键，再按一次释放（适合持续引导/按住）'], // 鼠标长按锁存
+  ['wheelup', '滚轮上', '每次按下向上滚动一格；可叠加子命令作为修饰键'], // 鼠标滚轮上滚
+  ['wheeldown', '滚轮下', '每次按下向下滚动一格；可叠加子命令作为修饰键'], // 鼠标滚轮下滚
+  ['switchlayer', '切层', '按住该键激活目标操作层，松开回退到公共层'], // 切换层
+  ['switchlayerandkey', '切层+按键', '按住时激活目标层并同时按下所选组合键，松开一并释放'], // 切层同时按下组合键（松开一并释放）
+  ['lookaround', '视角控制', '用右摇杆控制游戏视角（按住该键期间生效）'], // 右摇杆视角控制
+  ['mousemove', '鼠标移动', '用左摇杆模拟鼠标移动'], // 鼠标移动
+  ['interactionkey', '交互键', '临时解锁鼠标锁存，把光标移到屏幕中央右键点击一次，再恢复锁存与光标位置'], // 交互键：临时解锁锁存，屏幕中央左右键各点一次
+  ['releasemousetoggle', '释放鼠标锁存', '立即释放当前锁存中的鼠标左右键，并把光标移到游戏画面中央'], // 释放鼠标左右键长按锁存
+  ['swapmousetoggle', '交换左右键锁存', '把锁存中的鼠标键在左键与右键之间交换'], // 交换鼠标左右键长按锁存
+  ['finelook', '鼠标精细移动', '按住时右摇杆灵敏度降低（精细瞄准）'], // 按住时右摇杆低灵敏度
+  ['fastlook', '鼠标快速移动', '按住时右摇杆灵敏度提高（快速转向）'], // 按住时右摇杆高灵敏度
+  ['turnaround', '快速转身', '按下即按所选方向和幅度快速转动视角一次'], // 按下即按所选方向/幅度转动视角一次
+  ['toggleoverlayexpand', '悬浮窗展开/收起', '切换悬浮窗的展开/收起状态'], // 切换悬浮窗展开状态
+  ['statemacro', '解锁右键+居中+按键', '先解除右键锁存并把光标移到游戏画面中央，再按住所选按键/组合键；松开触发键时释放（可配状态条件）'], // 解锁右键锁存 -> 光标居中 -> 按住组合键（可配状态条件）
+  ['rightlooklock', '切换右键视角锁定', '按一次：光标移到画面左下角之外并按住右键（锁定视角）；再按一次：松开右键、等待游戏退出 mouselook 后把光标移到画面中央；左键锁存中不执行'], // 按一次锁定右键（光标移出画面），再按一次解锁并居中光标
 ];
 
 // STATE_OPTIONS：可用的角色状态（与插件 SLState 的 STATE_DEFS 一致）
@@ -256,9 +256,10 @@ function renderEdit(info, map) {
       '</div>'; // 格子结束
   }).join('');
 
-  // 动作类型 chips
-  $('edit-kinds').innerHTML = KINDS.map(([k, label]) => // 遍历动作类型生成 chip
+  // 动作类型 chips（data-tip 提供悬浮说明）
+  $('edit-kinds').innerHTML = KINDS.map(([k, label, tip]) => // 遍历动作类型生成 chip
     '<div class="chip' + (k === editKind ? ' active' : '') + '" ' + // 当前类型加 active 高亮
+    'data-tip="' + esc(tip) + '" ' + // 悬停显示动作说明
     'onclick="App.setKind(' + q(k) + ')">' + label + '</div>' // 点击切换动作类型
   ).join('');
 
@@ -325,9 +326,10 @@ function renderLongPress(info, map) {
   $('edit-long-clear').style.display = lp ? '' : 'none'; // 取消长按按钮仅在已配置时显示
   if (!hasMapping) return; // 无主动作则整块隐藏
 
-  // 长按动作类型 chips
-  $('edit-long-kinds').innerHTML = LONG_PRESS_KINDS.map(([k, label]) => // 遍历可选类型
+  // 长按动作类型 chips（data-tip 提供悬浮说明）
+  $('edit-long-kinds').innerHTML = LONG_PRESS_KINDS.map(([k, label, tip]) => // 遍历可选类型
     '<div class="chip' + ((k === 'none' ? !editLongKind : k === editLongKind) ? ' active' : '') + '" ' + // 未配置时「未设置」高亮
+    'data-tip="' + esc(tip) + '" ' + // 悬停显示动作说明
     'onclick="App.setLongKind(' + q(k) + ')">' + label + '</div>' // 点击切换长按类型
   ).join('');
 
@@ -631,6 +633,43 @@ document.addEventListener('pointerdown', (e) => { // 监听指针按下（事件
   el.appendChild(span); // 挂入波纹节点
   setTimeout(() => span.remove(), 600); // 动画结束后移除
 });
+
+// ---------------------------------------------------------------------
+// 悬浮提示：悬停带 data-tip 的元素时显示自绘气泡（fixed 定位，不被滚动容器裁剪）
+// ---------------------------------------------------------------------
+const tipEl = $('edit-tip'); // 提示气泡容器
+let tipTarget = null; // 当前正在显示提示的元素
+
+function hideTip() { // 隐藏提示气泡
+  if (tipEl.style.display !== 'none') tipEl.style.display = 'none';
+  tipTarget = null;
+}
+
+function showTip(el) { // 显示提示：优先在元素上方，空间不足时显示在下方
+  tipTarget = el;
+  tipEl.textContent = el.getAttribute('data-tip');
+  tipEl.style.display = 'block'; // 先显示才能测量实际尺寸
+  const r = el.getBoundingClientRect(); // 目标元素位置
+  const t = tipEl.getBoundingClientRect(); // 气泡尺寸
+  let left = r.left + r.width / 2 - t.width / 2; // 水平居中对齐
+  left = Math.max(8, Math.min(left, window.innerWidth - t.width - 8)); // 收敛到视口内
+  let top = r.top - t.height - 8; // 优先放在上方
+  if (top < 8) top = r.bottom + 8; // 上方空间不足则放到下方
+  tipEl.style.left = left + 'px';
+  tipEl.style.top = top + 'px';
+}
+
+document.addEventListener('mouseover', (e) => { // 事件委托：进入带 data-tip 的元素时显示
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (!el || el === tipTarget) return;
+  showTip(el);
+});
+document.addEventListener('mouseout', (e) => { // 离开元素时隐藏
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (el && el === tipTarget) hideTip();
+});
+window.addEventListener('blur', hideTip); // 窗口失焦时隐藏
+document.addEventListener('scroll', hideTip, true); // 任意容器滚动时隐藏（避免气泡错位）
 
 // ---------------------------------------------------------------------
 // 窗口显示策略：
