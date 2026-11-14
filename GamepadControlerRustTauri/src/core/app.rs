@@ -295,6 +295,11 @@ impl AppCore {
         );
     }
 
+    /// 物理 Esc 按下（键盘钩子回调）：状态宏后的指向手势取消，恢复 WASD 自动锁定。
+    pub fn handle_keyboard_escape(&mut self) {
+        self.mapper.resume_wasd_auto_lock(self.injector.as_ref());
+    }
+
     // 【Rust 语法】私有方法 `fn handle_connected(&mut self, ...)`：处理连接状态变化。
     fn handle_connected(&mut self, connected: bool) {
         // 更新本地连接标志。

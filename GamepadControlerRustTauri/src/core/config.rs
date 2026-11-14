@@ -514,6 +514,8 @@ fn mapping_to_json(mapping: &KeyMapping) -> Value {
         "longPress": mapping.long_press.as_ref().map(|a| action_to_json(a)),
         "longPressSubCommands": mapping.long_press_subs,
         "longPressMs": mapping.long_press_ms,
+        // 状态宏「临时禁用 WASD 自动锁定」开关（默认打开）
+        "suspendWasdAutoLock": mapping.suspend_wasd_auto_lock,
         // 状态条件（为空时不写，保持旧配置简洁）
         "stateConditions": mapping.state_conditions.iter().map(|c| json!({
             "stateId": c.state_id,
@@ -598,6 +600,11 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         .get("longPressLayerOnly")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // 状态宏「临时禁用 WASD 自动锁定」开关：缺省 true（默认打开，兼容旧配置）
+    let suspend_wasd_auto_lock = obj
+        .get("suspendWasdAutoLock")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     Some(KeyMapping {
         action,
         sub_commands: subs,
@@ -608,6 +615,7 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         long_press_ms,
         state_conditions: conditions,
         state_logic,
+        suspend_wasd_auto_lock,
     })
 }
 

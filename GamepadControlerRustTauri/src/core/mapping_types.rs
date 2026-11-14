@@ -303,6 +303,10 @@ pub struct KeyMapping {
     pub state_conditions: Vec<StateCond>,
     /// 多条状态条件的组合方式
     pub state_logic: StateLogic,
+    /// 「临时禁用 WASD 自动锁定」开关（仅状态宏动作生效，默认打开）：
+    /// 状态宏执行后暂停 WASD 自动锁定，直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后，
+    /// 再把光标移出画面左下角并重新锁定右键（鼠标右键不触发）。
+    pub suspend_wasd_auto_lock: bool,
 } // 结束 KeyMapping 结构体定义
 
 impl Default for KeyMapping {
@@ -317,6 +321,7 @@ impl Default for KeyMapping {
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS,
             state_conditions: Vec::new(),
             state_logic: StateLogic::Or,
+            suspend_wasd_auto_lock: true,
         }
     }
 }
@@ -340,6 +345,7 @@ impl KeyMapping {
             long_press_ms: Self::DEFAULT_LONG_PRESS_MS,
             state_conditions: Vec::new(),
             state_logic: StateLogic::Or,
+            suspend_wasd_auto_lock: true,
         }
     }
 

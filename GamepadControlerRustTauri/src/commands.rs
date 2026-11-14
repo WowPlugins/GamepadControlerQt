@@ -685,6 +685,7 @@ pub struct KeyboardRuleView {
     mouse_button: Option<MouseButton>,   // 鼠标键（Some 表示有）
     state_conditions: Vec<StateCondView>, // 状态条件列表
     state_logic: String,                 // or / and
+    suspend_wasd_auto_lock: bool,        // 状态宏：是否临时禁用 WASD 自动锁定（默认打开）
 }
 
 /// 键盘规则列表整体视图
@@ -742,6 +743,7 @@ fn keyboard_rule_view(r: &KeyboardRule) -> KeyboardRuleView {
             })
             .collect(),
         state_logic: r.mapping.state_logic.as_str().to_string(),
+        suspend_wasd_auto_lock: r.mapping.suspend_wasd_auto_lock,
     }
 }
 
@@ -891,6 +893,18 @@ pub fn toggle_keyboard_rule_sub(state: State<'_, AppState>, id: u32, key_code: i
         } else if r.mapping.sub_commands.len() < KeyMapping::MAX_SUB_COMMANDS {
             r.mapping.sub_commands.push(key_code); // 未满则追加
         }
+        core.profile_rev += 1;
+    }
+    drop(core);
+    state.shared.sync_keyboard();
+}
+
+// 设置状态宏「临时禁用 WASD 自动锁定」开关（默认打开）
+#[tauri::command]
+pub fn set_keyboard_rule_suspend_wasd_lock(state: State<'_, AppState>, id: u32, enabled: bool) {
+    let mut core = state.shared.core.lock().unwrap();
+    if let Some(r) = core.steam.profile.keyboard_rules.iter_mut().find(|r| r.id == id) {
+        r.mapping.suspend_wasd_auto_lock = enabled;
         core.profile_rev += 1;
     }
     drop(core);

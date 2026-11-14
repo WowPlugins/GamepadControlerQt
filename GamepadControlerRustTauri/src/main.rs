@@ -168,6 +168,7 @@ fn main() { // 程序主入口
             commands::set_keyboard_rule_action, // 设置规则动作
             commands::toggle_keyboard_rule_sub, // 切换规则子命令
             commands::set_keyboard_rule_state_conditions, // 设置规则状态条件
+            commands::set_keyboard_rule_suspend_wasd_lock, // 状态宏：临时禁用 WASD 自动锁定开关
         ]) // 命令数组宏结束
         // 【Rust 语法】闭包：|app| 为参数列表；在应用初始化完成后、运行前回调，用于创建额外窗口
         .setup(|app| { 

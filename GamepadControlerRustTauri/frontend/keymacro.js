@@ -246,11 +246,19 @@ function targetHTML(rule, kind) {
     return '<div class="faint">未设置：选择其他类型后即可配置目标</div>';
   }
   if (kind === 'keyboard' || kind === 'statemacro') {
-    return '<div class="dim">选择按键</div><div class="chips-row">' +
+    let html = '<div class="dim">选择按键</div><div class="chips-row">' +
       COMMON_KEYS.map(([code, label]) =>
         '<div class="chip' + (code === rule.actionKeyCode ? ' active' : '') + '" ' +
         'onclick="App.setKey(' + code + ')">' + label + '</div>'
       ).join('') + '</div>';
+    // 状态宏：临时禁用 WASD 自动锁定开关（默认打开，适合指向型技能）
+    if (kind === 'statemacro') {
+      html += '<div class="dim" style="margin-top:8px;">指向型技能</div><div class="chips-row">' +
+        '<div class="chip' + (rule.suspendWasdAutoLock ? ' active' : '') + '" ' +
+        'data-tip="打开后：状态宏执行期间 WASD 不自动锁定右键；左键点击 / Esc / 键盘点击 / 释放鼠标锁存后，光标移到画面左下角外并重新锁定右键，恢复 WASD 自动锁定（鼠标右键不触发）" ' +
+        'onclick="App.toggleSuspendWasdLock()">临时禁用 WASD 自动锁定</div></div>';
+    }
+    return html;
   }
   if (kind === 'mouse' || kind === 'mousetoggle') {
     return '<div class="dim">选择鼠标键</div><div class="chips-row">' +
@@ -338,6 +346,12 @@ const App = {
     if (!rule) return;
     invoke('set_keyboard_rule_action', { id: rule.id, kind: effectiveKind(rule), keyCode: code, mouseButton: null })
       .catch((e) => console.error('set_keyboard_rule_action:', e));
+  },
+  toggleSuspendWasdLock() { // 切换状态宏：临时禁用 WASD 自动锁定
+    const rule = selectedRule();
+    if (!rule) return;
+    invoke('set_keyboard_rule_suspend_wasd_lock', { id: rule.id, enabled: !rule.suspendWasdAutoLock })
+      .catch((e) => console.error('set_keyboard_rule_suspend_wasd_lock:', e));
   },
   setMouse(name) { // 设置动作目标鼠标键
     const rule = selectedRule();

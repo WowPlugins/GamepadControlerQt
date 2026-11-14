@@ -139,6 +139,7 @@ struct PendingLongPress {
     subs: Vec<i32>,            // 长按动作的子命令键码
     layer_id: String,          // 该映射所在的层（释放层内鼠标时使用）
     layer_only: bool,          // 长按「只切换层」开关（是否掩蔽已按住的修饰键）
+    suspend_wasd_auto_lock: bool, // 长按动作为状态宏时：「临时禁用 WASD 自动锁定」开关
 } // 结束 PendingLongPress 结构体
 
 /// 鼠标键是否为左/右键（需求6 只释放左右键锁存）
@@ -192,6 +193,12 @@ pub struct MapperState {
     pub auto_locked_right: bool,
     /// 快捷键切换的右键视角锁定（锁定：光标移出画面 + 按住右键；再按一次解锁）
     pub right_look_locked: bool,
+    /// 状态宏（解锁+居中+按键）后临时禁用 WASD 自动锁定，
+    /// 直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后恢复并重新锁定右键（鼠标右键不触发）
+    pub wasd_auto_lock_suspended: bool,
+    /// WASD 自动锁定的延迟恢复时刻：鼠标左右键松开后延迟恢复，
+    /// 避免恢复时移动光标影响游戏对本次点击落点的判定（否则表现为"左键没效果"）
+    pub wasd_resume_at: Option<Instant>,
     /// 待判定的长按：触发源 -> 长按信息
     pub pending_long_press: HashMap<TriggerId, PendingLongPress>,
     /// 已触发长按的触发源（松开时按长按动作释放）
@@ -253,6 +260,8 @@ impl MapperState {
         self.pressed_mouse_layer.clear(); // 清空鼠标单击来源层记录
         self.auto_locked_right = false; // 清除自动锁定标记
         self.right_look_locked = false; // 清除快捷键右键视角锁定标记
+        self.wasd_auto_lock_suspended = false; // 清除 WASD 自动锁定临时禁用标记
+        self.wasd_resume_at = None; // 清除延迟恢复时刻
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
         self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
@@ -458,6 +467,11 @@ impl MapperState {
         if let Some(mb) = self.pressed_mouse_buttons.remove(&button) {
             injector.send_mouse_up(mb); // 发送鼠标键抬起
             self.pressed_mouse_layer.remove(&button); // 清理来源层标记
+            // 状态宏后的指向手势：左键点击松开后才恢复 WASD 自动锁定（右键不参与）。
+            // 延迟到 tick 执行：立即移动光标会让游戏把本次点击判到屏幕边缘（表现为左键没效果）。
+            if mb == MouseButton::Left && self.wasd_auto_lock_suspended {
+                self.wasd_resume_at = Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS));
+            }
         } // 结束 if let 分支
     } // 结束 release_button_injection 函数
 
@@ -482,7 +496,7 @@ impl MapperState {
             // 配置了长按但未超阈值就松开：此时才执行短按动作（按下记录 + 立即释放 = 一次点按），
             // 这样长按时不会先误触发短按。切层动作在按下时已执行，跳过以免重复切层。
             if had_pending && !fired_long && !matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, injector, event_tx, look, wow_exe);
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, mapping.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe);
             }
             // 精细移动：按「本次实际执行的动作」复位——长按触发时用长按动作类型，否则用主动作类型
             let acted = if fired_long { mapping.long_press.as_ref() } else { Some(&mapping.action) };
@@ -500,7 +514,7 @@ impl MapperState {
             // 配置了长按动作：按下先不执行短按，等松开（未超阈值）或 Tick 判定超阈值后再决定，
             // 避免长按时先触发一次短按（点击）。
             if matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
-                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, false, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
+                self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, false, mapping.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
             }
             let threshold = mapping.long_press_ms.clamp(100, 5000); // 阈值限幅 100~5000ms
             self.pending_long_press.insert(
@@ -512,13 +526,14 @@ impl MapperState {
                     subs: mapping.long_press_subs.clone(), // 长按子命令
                     layer_id: layer_id.to_string(), // 来源层
                     layer_only: mapping.long_press_layer_only, // 长按「只切换层」开关
+                    suspend_wasd_auto_lock: mapping.suspend_wasd_auto_lock, // 「临时禁用 WASD 自动锁定」开关
                 },
             );
             return; // 短按延后到松手时执行
         }
 
         // 未配置长按：按下立即执行短按动作
-        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, injector, event_tx, look, wow_exe);
+        self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, mapping.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe);
     } // 结束 handle_button 函数
 
     /// 长按检查（由轮询线程每个 Tick 调用）：满足阈值的按钮切换为长按动作
@@ -531,6 +546,13 @@ impl MapperState {
     ) {
         // 到点的延迟按回：把掩蔽抬起的层保持修饰键按回（保证掩蔽窗口跨过 WoW 一帧）
         self.flush_mask_restore(injector);
+        // 到点的 WASD 自动锁定恢复（鼠标左右键松开后延迟执行，避开本次点击的落点判定）
+        if let Some(at) = self.wasd_resume_at {
+            if Instant::now() >= at {
+                self.wasd_resume_at = None;
+                self.resume_wasd_auto_lock(injector);
+            }
+        }
         if self.pending_long_press.is_empty() { // 无待判定项时直接返回
             return;
         }
@@ -547,7 +569,7 @@ impl MapperState {
                 self.release_button_injection(button, injector); // 先释放按下时已注入的状态（配置长按后短按未注入，通常无内容）
                 self.long_press_buttons.insert(button); // 标记为长按已触发
                 let layer = p.layer_id.clone(); // 先克隆层 id，避免与 &mut self 借用冲突
-                self.execute_press(button, &p.action, &p.subs, &layer, p.layer_only, injector, event_tx, look, wow_exe); // 执行长按动作
+                self.execute_press(button, &p.action, &p.subs, &layer, p.layer_only, p.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe); // 执行长按动作
             } // 结束 if let 分支
         } // 结束 for 循环
     } // 结束 check_long_press 函数
@@ -560,6 +582,7 @@ impl MapperState {
         subs: &[i32],
         layer_id: &str,
         layer_only: bool, // 「只切换层」开关：键盘/滚轮注入前是否掩蔽已按住的修饰键
+        suspend_wasd_auto_lock: bool, // 状态宏「临时禁用 WASD 自动锁定」开关
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         look: &LookState,
@@ -595,7 +618,7 @@ impl MapperState {
             }
             ActionType::ToggleOverlayExpand => self.overlay_expand_rev += 1, // 悬浮窗展开/收起切换：计数 +1，前端轮询翻转
             ActionType::StateMacro => { // 状态宏：解锁右键锁存 -> 光标居中 -> 发送组合键
-                self.handle_state_macro(button, action.key_code, subs, injector, event_tx, wow_exe);
+                self.handle_state_macro(button, action.key_code, subs, suspend_wasd_auto_lock, injector, event_tx, wow_exe);
             }
             ActionType::RightLookLock => self.handle_right_look_lock(injector, event_tx, wow_exe), // 切换右键视角锁定
             ActionType::SwitchLayerAndKey => { // 切层+按键：层已由 SteamInput 激活，此处只注入组合键
@@ -674,6 +697,13 @@ impl MapperState {
         } // 结束 for 循环
         self.pressed_main_keys.insert(button, main_key_code); // 记录主键已按下
         self.pressed_sub_keys.insert(button, valid_subs); // 记录子命令已按下
+        // 状态宏后的指向手势：按下 Esc 立即取消并恢复；其它键盘点击（施放/取消技能）也触发延迟恢复，
+        // 延迟是为了不移动光标破坏本次施放的目标位置
+        if main_key_code == android_key::ESCAPE {
+            self.resume_wasd_auto_lock(injector);
+        } else if self.wasd_auto_lock_suspended {
+            self.wasd_resume_at = Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS));
+        }
     } // 结束 handle_keyboard_key 函数
 
     /// 滚轮滚动：支持子命令组合键（如 Alt+滚轮）。
@@ -733,6 +763,8 @@ impl MapperState {
         injector.send_mouse_down(mb); // 注入鼠标键按下
         self.pressed_mouse_buttons.insert(button, mb); // 记录按下状态
         self.pressed_mouse_layer.insert(button, layer_id.to_string()); // 记录来源层（需求6）
+        // 状态宏后的指向手势：恢复 WASD 自动锁定放到「松开」时执行（见 release_button_injection），
+        // 按下期间保持暂停且不移动光标，保证本次点击落点正确
     } // 结束 handle_mouse_click 函数
 
     /// 鼠标长按锁存（MouseToggle）：每次按下切换保持状态。
@@ -767,6 +799,10 @@ impl MapperState {
                 mb, // 鼠标键
                 active: true, // 标记为激活
             }); // 结束事件构造与发送
+            // 状态宏后的指向手势：左键锁存解除（点击完成）后延迟恢复 WASD 自动锁定（右键不参与）
+            if mb == MouseButton::Left && self.wasd_auto_lock_suspended {
+                self.wasd_resume_at = Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS));
+            }
         } // 结束 else 分支
     } // 结束 handle_mouse_toggle 函数
 
@@ -780,6 +816,7 @@ impl MapperState {
         button: TriggerId,
         key_code: i32,
         subs: &[i32],
+        suspend_wasd_auto_lock: bool, // 「临时禁用 WASD 自动锁定」开关（默认打开）
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         wow_exe: &str, // 目标游戏 exe（按游戏客户区计算居中坐标）
@@ -841,7 +878,42 @@ impl MapperState {
         if key_code != 0 {
             self.handle_keyboard_key(button, key_code, subs, false, injector); // 状态宏内部组合键不掩蔽
         }
+
+        // 4) 「临时禁用 WASD 自动锁定」：指向型技能期间 WASD 不再自动锁定右键，
+        //    直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后由 resume_wasd_auto_lock 恢复（鼠标右键不触发）。
+        if suspend_wasd_auto_lock {
+            // 本次触发前已处于暂停中：相当于暂停期间又按了一次键盘按键（状态宏自身就注入该键），
+            // 按「键盘点击」处理，延迟恢复 WASD 自动锁定；首次触发则保持暂停等待指向手势
+            let already_suspended = self.wasd_auto_lock_suspended;
+            self.wasd_auto_lock_suspended = true;
+            self.wasd_resume_at = if already_suspended && key_code != 0 {
+                Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS))
+            } else {
+                None // 首次进入暂停：取消残留的延迟恢复
+            };
+            crate::dbg_log!("状态宏：临时禁用 WASD 自动锁定（等待指向手势结束）");
+        }
     } // 结束 handle_state_macro 函数
+
+    /// 恢复 WASD 自动锁定：把光标移出画面左下角并重新按下右键（与 WASD 拦截建立锁定的行为一致）。
+    /// 由状态宏后的指向手势结束时触发（左键点击 / Esc / 键盘点击 / 释放鼠标锁存）。
+    pub fn resume_wasd_auto_lock(&mut self, injector: &InputInjector) {
+        if !self.wasd_auto_lock_suspended {
+            return; // 未被状态宏临时禁用
+        }
+        self.wasd_auto_lock_suspended = false; // 先恢复自动锁定能力
+        if self.is_mouse_locked(MouseButton::Right) {
+            crate::dbg_log!("状态宏手势结束：右键已锁定，仅恢复 WASD 自动锁定");
+            return; // 右键已被其它动作锁定，无需重复锁定
+        }
+        let (sw, sh) = injector.screen_size();
+        injector.set_cursor_pos(-(sw * 2 / 3), sh + sh * 2 / 3); // 光标移出画面左下角
+        self.mask_lift(&[], None, injector); // 抬起待掩蔽修饰键，到点由 tick 按回
+        injector.force_mouse_up(MouseButton::Right);
+        injector.send_mouse_down(MouseButton::Right); // 重新锁定鼠标右键
+        self.auto_locked_right = true;
+        crate::dbg_log!("状态宏手势结束：恢复 WASD 自动锁定并重新锁定右键");
+    } // 结束 resume_wasd_auto_lock 函数
 
     // -----------------------------------------------------------------
     // 切换右键视角锁定（快捷键）
@@ -873,6 +945,8 @@ impl MapperState {
         injector.force_mouse_up(MouseButton::Right);
         injector.send_mouse_down(MouseButton::Right); // 锁定鼠标右键
         self.right_look_locked = true;
+        // 切换锁定已接管视角：结束状态宏的「临时禁用 WASD 自动锁定」暂停
+        self.wasd_auto_lock_suspended = false;
         crate::dbg_log!("切换右键锁定：锁定（光标移出画面左下角）");
     } // 结束 handle_right_look_lock 函数
 
@@ -902,6 +976,8 @@ impl MapperState {
         self.extra_toggled.remove(&MouseButton::Right); // 交换产生的右键锁存
         self.auto_locked_right = false; // WASD 自动锁定标记
         self.right_look_locked = false; // 快捷键锁定标记
+        // 解锁后恢复 WASD 自动锁定能力：否则状态宏的暂停会一直残留，WASD 再也锁不住视角
+        self.wasd_auto_lock_suspended = false;
         self.bump_mask_restore(); // 松开动作：顺延掩蔽修饰键的按回时刻
         injector.send_mouse_up(MouseButton::Right); // 松开右键（记录未按下时无副作用）
         // 等待游戏处理右键抬起并退出 mouselook，再移动光标
@@ -995,6 +1071,9 @@ impl MapperState {
         // 按游戏客户区计算：游戏非全屏时主屏中心会落到画面外，光标等于没进游戏。
         let (cx, cy) = self.target_center(wow_exe, injector);
         injector.move_cursor_absolute(cx, cy); // 光标移到游戏画面中央（SendInput 绝对移动，游戏可感知）
+        // 状态宏后的指向手势：释放鼠标锁存视为指向结束，恢复 WASD 自动锁定并重新锁定右键
+        // （最终光标停在画面左下角外，右键重新按住，与原 WASD 自动锁定一致）
+        self.resume_wasd_auto_lock(injector);
     } // 结束 handle_release_mouse_toggle 函数
 
     /// 目标游戏客户区中心（找不到游戏窗口时回退主屏中心）
@@ -1238,6 +1317,7 @@ impl MapperState {
         // WASD 继续走常规 SendInput，避免打断左键操作。
         if !target.is_empty()
             && game_foreground
+            && !self.wasd_auto_lock_suspended // 状态宏临时禁用期间不自动锁定
             && !self.is_mouse_locked(MouseButton::Right)
             && !self.is_mouse_locked(MouseButton::Left)
         { // 左右键均未锁存才自动锁定右键

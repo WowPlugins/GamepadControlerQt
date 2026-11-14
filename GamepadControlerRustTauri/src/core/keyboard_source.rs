@@ -54,6 +54,7 @@ struct CompiledRule {
 enum KbEvent {
     Press(u32),   // 规则按下
     Release(u32), // 规则松开
+    Escape,       // 物理 Esc 按下（状态宏指向手势取消，恢复 WASD 自动锁定）
     Quit,         // 停止 worker
 }
 
@@ -206,6 +207,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     // 按下：连发（按住不放会重复 keydown）已被吞过则继续吞，且不重复投递
     if ctx.swallowed().contains_key(&vk) {
         return LRESULT(1);
+    }
+
+    // 物理 Esc 按下：无论是否命中规则，都通知映射器（状态宏后的指向手势取消）
+    if vk == 0x1B {
+        let _ = ctx.tx().send(KbEvent::Escape);
     }
 
     // 规则匹配：修饰键集合严格相等 + 主键一致 + 状态条件满足
@@ -372,6 +378,7 @@ fn run_worker(rx: Receiver<KbEvent>, core: Arc<Mutex<AppCore>>, running: Arc<Ato
                     match event {
                         KbEvent::Press(id) => core.handle_keyboard_event(id, true),
                         KbEvent::Release(id) => core.handle_keyboard_event(id, false),
+                        KbEvent::Escape => core.handle_keyboard_escape(),
                         KbEvent::Quit => {}
                     }
                 }
