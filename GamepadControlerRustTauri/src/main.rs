@@ -118,7 +118,7 @@ fn main() { // 程序主入口
         // 【Rust 语法】.manage()：把 AppState 实例注入 Tauri 状态管理，命令中可用 State<AppState> 获取
         .manage(AppState { // 注入全局共享状态
             shared, // 字段简写：等价于 shared: shared，把共享状态移入
-            overlay_visible: Arc::new(AtomicBool::new(false)), // 新建原子布尔并初始化为 false（悬浮窗默认隐藏）
+            overlay_visible: Arc::new(AtomicBool::new(true)), // 原子布尔初始化为 true（程序启动默认显示悬浮窗）
         }) // AppState 结构体字面量结束
         // 【Rust 语法】属性宏 tauri::generate_handler!：把命令函数列表编译为前端 invoke 的分发器
         .invoke_handler(tauri::generate_handler![ // 注册所有前端可调用的 IPC 命令
@@ -173,7 +173,7 @@ fn main() { // 程序主入口
         // 【Rust 语法】闭包：|app| 为参数列表；在应用初始化完成后、运行前回调，用于创建额外窗口
         .setup(|app| { 
             // setup 钩子：创建悬浮窗
-            // 悬浮窗：无边框透明置顶小窗，默认隐藏；前端 overlay.html 负责渲染（圆角由 CSS 实现）
+            // 悬浮窗：无边框透明置顶小窗，启动默认显示；前端 overlay.html 负责渲染（圆角由 CSS 实现）
             let _overlay = tauri::WebviewWindowBuilder::new( // 创建 Webview 窗口构建器（句柄无需使用，前缀 _ 避免未用警告）
                 app, // 传入应用句柄
                 "overlay", // 窗口标签名，供 get_webview_window("overlay") 查找
@@ -186,7 +186,7 @@ fn main() { // 程序主入口
             .transparent(true) // 启用窗口透明背景
             .always_on_top(true) // 窗口始终置顶
             .skip_taskbar(true) // 不在任务栏显示
-            .visible(false) // 默认隐藏，由 toggle_overlay 控制显隐
+            .visible(true) // 启动默认显示，由 toggle_overlay 控制显隐
             // 【Rust 语法】? 错误传播：Result 为 Ok 则取值，Err 则从 setup 闭包提前返回该错误
             .build()?; // 构建窗口，失败则 ? 传播错误
             Ok(()) // 【Rust 语法】Ok 包装单元类型 ()：表示 setup 处理成功
