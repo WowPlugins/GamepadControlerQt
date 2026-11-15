@@ -54,7 +54,6 @@ let stateReadEnabled = false;  // 是否启用角色状态读取（来自后端�
 let stateReadInterval = 50;    // 状态读取周期（毫秒）
 let stateBits = 0;             // 当前 10 个状态位图（bit0..bit9）
 let debugLogEnabled = false;   // 调试日志开关（来自后端设置）
-let logAutoOpened = false;     // 启动后是否已根据配置自动打开过日志窗口
 
 let prevMain = null;           // 上一次渲染的快照 JSON 串，用于对比避免重复渲染
 
@@ -168,12 +167,8 @@ function renderMain(snap) {
   const active = STATE_NAMES.filter((_, i) => stateBits & (1 << i)); // 取出当前为真的状态
   $('state-bits-val').textContent = active.length ? active.join(' ') : '无'; // 显示当前状态
 
-  // 调试日志开关（开启后后端分配控制台并输出像素读取日志）
+  // 调试日志开关（开启后日志写入 debug.log，日志窗口需手动打开）
   debugLogEnabled = !!snap.debug_log; // 同步开关状态
-  if (debugLogEnabled && !logAutoOpened) { // 启动时配置为开启 → 自动打开日志窗口
-    logAutoOpened = true;
-    openLogWindow();
-  }
   const debugBtn = $('btn-debug-log'); // 开关按钮
   debugBtn.textContent = debugLogEnabled ? '已开启' : '已关闭'; // 按钮文案
   debugBtn.className = 'btn' + (debugLogEnabled ? ' active' : ''); // 开启时高亮
