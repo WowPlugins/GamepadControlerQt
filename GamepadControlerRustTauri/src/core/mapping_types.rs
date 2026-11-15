@@ -303,6 +303,10 @@ pub struct KeyMapping {
     pub state_conditions: Vec<StateCond>,
     /// 多条状态条件的组合方式
     pub state_logic: StateLogic,
+    /// 长按动作的状态条件（为空表示无约束，始终生效）
+    pub long_state_conditions: Vec<StateCond>,
+    /// 长按状态条件的组合方式
+    pub long_state_logic: StateLogic,
     /// 「临时禁用 WASD 自动锁定」开关（仅状态宏动作生效，默认打开）：
     /// 状态宏执行后暂停 WASD 自动锁定，直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后，
     /// 再把光标移出画面左下角并重新锁定右键（鼠标右键不触发）。
@@ -321,6 +325,8 @@ impl Default for KeyMapping {
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS,
             state_conditions: Vec::new(),
             state_logic: StateLogic::Or,
+            long_state_conditions: Vec::new(),
+            long_state_logic: StateLogic::Or,
             suspend_wasd_auto_lock: true,
         }
     }
@@ -345,22 +351,36 @@ impl KeyMapping {
             long_press_ms: Self::DEFAULT_LONG_PRESS_MS,
             state_conditions: Vec::new(),
             state_logic: StateLogic::Or,
+            long_state_conditions: Vec::new(),
+            long_state_logic: StateLogic::Or,
             suspend_wasd_auto_lock: true,
         }
     }
 
     /// 判断当前角色状态是否满足本映射的条件（无条件下恒为 true）
     pub fn state_allows(&self, state_reader: impl Fn(&str) -> Option<bool>) -> bool {
-        if self.state_conditions.is_empty() {
+        Self::conditions_allow(&self.state_conditions, self.state_logic, &state_reader)
+    }
+
+    /// 判断当前角色状态是否满足长按动作的条件（无条件下恒为 true）
+    pub fn long_state_allows(&self, state_reader: impl Fn(&str) -> Option<bool>) -> bool {
+        Self::conditions_allow(&self.long_state_conditions, self.long_state_logic, &state_reader)
+    }
+
+    /// 条件判断的共用实现：按 Or / And 组合所有条件
+    fn conditions_allow(
+        conditions: &[StateCond],
+        logic: StateLogic,
+        state_reader: &dyn Fn(&str) -> Option<bool>,
+    ) -> bool {
+        if conditions.is_empty() {
             return true;
         }
-        match self.state_logic {
-            StateLogic::Or => self
-                .state_conditions
+        match logic {
+            StateLogic::Or => conditions
                 .iter()
                 .any(|c| state_reader(&c.state_id).unwrap_or(false) == c.expected),
-            StateLogic::And => self
-                .state_conditions
+            StateLogic::And => conditions
                 .iter()
                 .all(|c| state_reader(&c.state_id).unwrap_or(false) == c.expected),
         }

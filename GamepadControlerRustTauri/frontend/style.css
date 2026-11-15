@@ -708,6 +708,44 @@ body::before {
   color: #7fc9c4; /* 青色强调 */
 }
 
+/* ---- 编辑页分区卡片：短按 / 长按 / 状态条件 / 回落开关 ---- */
+.edit-section {
+  display: flex; /* 弹性布局 */
+  flex-direction: column; /* 纵向排列 */
+  gap: 8px; /* 区内间距 */
+  padding: 8px 10px 10px; /* 内边距 */
+  border: 1px solid #3f434a; /* 描边 */
+  border-radius: 10px; /* 圆角 */
+  background: rgba(255, 255, 255, 0.02); /* 极淡底色，区分分区 */
+}
+.edit-section.click-section { border-left: 3px solid #7fc9c4; } /* 短按区：青色左边线 */
+.edit-section.long-section { border-left: 3px solid #f0a34a; } /* 长按区：橙色左边线 */
+.edit-section.state-section,
+.edit-section.fallback-section { border-left: 3px solid #5a606a; } /* 其它区：灰色左边线 */
+.edit-section-head {
+  display: flex; /* 弹性布局 */
+  align-items: baseline; /* 标题与说明基线对齐 */
+  gap: 8px; /* 间距 */
+  flex-wrap: wrap; /* 空间不足时换行 */
+}
+.edit-section-title {
+  font-size: 13px; /* 分区标题字号 */
+  font-weight: 600; /* 加粗 */
+  color: #e8eaee; /* 默认文字颜色 */
+}
+.edit-section-title.click { color: #7fc9c4; } /* 短按标题：青色 */
+.edit-section-title.long { color: #f0a34a; } /* 长按标题：橙色 */
+.check-row {
+  display: flex; /* 弹性布局 */
+  align-items: center; /* 垂直居中 */
+  gap: 6px; /* 勾选框与文字间距 */
+  margin: 0; /* 去掉默认外边距 */
+  cursor: pointer; /* 手型光标 */
+  color: #a3a8b2; /* 次要文字颜色 */
+  font-size: 13px; /* 字号 */
+}
+.check-row input { accent-color: #7fc9c4; } /* 勾选框使用主题青色 */
+
 /* ---- 物理键盘映射视图 ---- */
 .kb-combo {
   flex: 1; /* 占满剩余宽度 */

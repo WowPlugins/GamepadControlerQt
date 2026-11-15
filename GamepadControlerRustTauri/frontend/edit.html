@@ -31,56 +31,82 @@
 
       <div class="edit-divider"></div> <!-- 左右栏之间的竖向分隔线 -->
 
-      <!-- 右栏：动作配置 -->
+      <!-- 右栏：动作配置（短按 / 长按分区，避免混在一起） -->
       <div class="edit-right">
         <div class="edit-current-row"> <!-- 当前按键与映射显示行 -->
           <span id="edit-current">当前: --</span> <!-- 当前选中按键及其映射描述（动态刷新） -->
           <button class="btn" id="edit-clear">清除映射</button> <!-- 清除当前按键映射 -->
         </div>
-        <div class="dim">动作类型</div> <!-- 动作类型区标题 -->
-        <div id="edit-kinds" class="chips-row"></div> <!-- 动作类型 chips（动态渲染：键盘/鼠标/滚轮/切层等） -->
 
-        <div class="dim">目标</div> <!-- 目标区标题 -->
-        <div id="edit-target"></div> <!-- 目标选择区（按动作类型动态渲染：按键/鼠标键/目标层） -->
+        <!-- ===== 短按动作 ===== -->
+        <section class="edit-section click-section">
+          <div class="edit-section-head">
+            <span class="edit-section-title click">短按动作</span>
+            <span class="faint">按下触发；配置了长按时，未超过阈值松开则执行这里</span>
+          </div>
+          <div class="dim">动作类型</div> <!-- 动作类型区标题 -->
+          <div id="edit-kinds" class="chips-row"></div> <!-- 动作类型 chips（动态渲染：键盘/鼠标/滚轮/切层等） -->
 
-        <div class="dim" id="edit-subs-label">子命令</div> <!-- 子命令区标题（含已选数量） -->
-        <div id="edit-subs" class="chips-row"></div> <!-- 子命令 chips（动态渲染，最多 3 个） -->
+          <div class="dim">目标</div> <!-- 目标区标题 -->
+          <div id="edit-target"></div> <!-- 目标选择区（按动作类型动态渲染：按键/鼠标键/目标层） -->
 
-        <label id="edit-click-only-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 点击「只切换层」开关 -->
-          <input type="checkbox" id="edit-click-only" onchange="App.setLayerOnly()"> <!-- 开关本体 -->
-          <span>点击：只切换层（打开后不带上切层键按住的修饰键，如按住 LB 的 Ctrl）</span>
-        </label>
+          <div class="dim" id="edit-subs-label">短按子命令</div> <!-- 子命令区标题（含已选数量） -->
+          <div id="edit-subs" class="chips-row"></div> <!-- 子命令 chips（动态渲染，最多 3 个） -->
 
-        <label id="edit-fallback-click-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 短按回落公共层开关 -->
-          <input type="checkbox" id="edit-fallback-click" onchange="App.setFallback()"> <!-- 开关本体 -->
-          <span>短按：未映射时回落公共层（关闭后本层未映射的按键短按不再使用公共层映射）</span>
-        </label>
+          <label id="edit-click-only-row" class="check-row"> <!-- 短按「只切换层」开关 -->
+            <input type="checkbox" id="edit-click-only" onchange="App.setLayerOnly()"> <!-- 开关本体 -->
+            <span>短按：只切换层（不带上切层键按住的修饰键，如按住 LB 的 Ctrl）</span>
+          </label>
 
-        <label id="edit-fallback-long-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 长按回落公共层开关 -->
-          <input type="checkbox" id="edit-fallback-long" onchange="App.setFallback()"> <!-- 开关本体 -->
-          <span>长按：未映射时回落公共层（关闭后本层未映射的按键长按不再使用公共层映射）</span>
-        </label>
+          <div class="dim" id="edit-states-label">短按生效状态条件（不选则始终生效）</div> <!-- 短按状态条件标题 -->
+          <div id="edit-states" class="chips-row"></div> <!-- 短按状态 chips：未选 / = 真 / = 假 循环切换 -->
+          <div id="edit-state-logic" class="chips-row"></div> <!-- 短按条件组合方式：逻辑或 / 逻辑与 -->
+        </section>
 
-        <div class="dim" id="edit-states-label">生效状态条件（不选则始终生效）</div> <!-- 状态条件标题 -->
-        <div id="edit-states" class="chips-row"></div> <!-- 状态 chips：未选 / = 真 / = 假 循环切换 -->
-        <div id="edit-state-logic" class="chips-row"></div> <!-- 条件组合方式：逻辑或 / 逻辑与 -->
+        <!-- ===== 长按动作 ===== -->
+        <section class="edit-section long-section" id="edit-long-section">
+          <div class="edit-section-head">
+            <span class="edit-section-title long">长按动作</span>
+            <span class="faint">按住超过阈值执行；未配置则只执行短按</span>
+          </div>
+          <div class="dim" id="edit-long-label">动作类型</div> <!-- 长按动作类型标题 -->
+          <div id="edit-long-kinds" class="chips-row"></div> <!-- 长按动作类型 chips（动态渲染） -->
+          <div id="edit-long-target"></div> <!-- 长按目标选择区（按长按类型动态渲染） -->
+          <div class="dim" id="edit-long-subs-label">长按子命令</div> <!-- 长按子命令区标题（含已选数量） -->
+          <div id="edit-long-subs" class="chips-row"></div> <!-- 长按子命令 chips（动态渲染，最多 3 个） -->
+          <label id="edit-long-only-row" class="check-row"> <!-- 长按「只切换层」开关 -->
+            <input type="checkbox" id="edit-long-only" onchange="App.setLayerOnly()"> <!-- 开关本体 -->
+            <span>长按：只切换层（不带上切层键按住的修饰键，如按住 LB 的 Ctrl）</span>
+          </label>
 
-        <div class="dim" id="edit-long-label">长按动作（按住超过阈值执行长按，未超过则松手时执行点击）</div> <!-- 长按动作区标题 -->
-        <div id="edit-long-kinds" class="chips-row"></div> <!-- 长按动作类型 chips（动态渲染） -->
-        <div id="edit-long-target"></div> <!-- 长按目标选择区（按长按类型动态渲染） -->
-        <div class="dim" id="edit-long-subs-label">长按子命令</div> <!-- 长按子命令区标题（含已选数量） -->
-        <div id="edit-long-subs" class="chips-row"></div> <!-- 长按子命令 chips（动态渲染，最多 3 个） -->
-        <label id="edit-long-only-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 长按「只切换层」开关 -->
-          <input type="checkbox" id="edit-long-only" onchange="App.setLayerOnly()"> <!-- 开关本体 -->
-          <span>长按：只切换层（打开后不带上切层键按住的修饰键，如按住 LB 的 Ctrl）</span>
-        </label>
-        <div class="slider-row" id="edit-long-ms-row"> <!-- 长按阈值调整行 -->
-          <div class="slider-label">长按阈值</div> <!-- 阈值项名称 -->
-          <button class="mini" onclick="App.adjustLongMs(-50)">−</button> <!-- 减小阈值 50ms -->
-          <div class="slider-val" id="edit-long-ms">500ms</div> <!-- 当前阈值（动态刷新） -->
-          <button class="mini" onclick="App.adjustLongMs(50)">+</button> <!-- 增大阈值 50ms -->
-          <button class="btn" id="edit-long-clear">取消长按</button> <!-- 清除长按动作 -->
-        </div>
+          <div class="dim" id="edit-long-states-label">长按生效状态条件（不选则始终生效）</div> <!-- 长按状态条件标题 -->
+          <div id="edit-long-states" class="chips-row"></div> <!-- 长按状态 chips -->
+          <div id="edit-long-state-logic" class="chips-row"></div> <!-- 长按条件组合方式 -->
+          <div class="slider-row" id="edit-long-ms-row"> <!-- 长按阈值调整行 -->
+            <div class="slider-label">长按阈值</div> <!-- 阈值项名称 -->
+            <button class="mini" onclick="App.adjustLongMs(-50)">−</button> <!-- 减小阈值 50ms -->
+            <div class="slider-val" id="edit-long-ms">500ms</div> <!-- 当前阈值（动态刷新） -->
+            <button class="mini" onclick="App.adjustLongMs(50)">+</button> <!-- 增大阈值 50ms -->
+            <button class="btn" id="edit-long-clear">取消长按</button> <!-- 清除长按动作 -->
+          </div>
+        </section>
+
+        <!-- ===== 未映射时的回落开关（仅非公共层） ===== -->
+        <section class="edit-section fallback-section" id="edit-fallback-section">
+          <div class="edit-section-head">
+            <span class="edit-section-title">未映射时回落公共层</span>
+            <span class="faint">仅本层没有该按键映射时生效</span>
+          </div>
+          <label id="edit-fallback-click-row" class="check-row"> <!-- 短按回落公共层开关 -->
+            <input type="checkbox" id="edit-fallback-click" onchange="App.setFallback()"> <!-- 开关本体 -->
+            <span>短按：回落公共层</span>
+          </label>
+          <label id="edit-fallback-long-row" class="check-row"> <!-- 长按回落公共层开关 -->
+            <input type="checkbox" id="edit-fallback-long" onchange="App.setFallback()"> <!-- 开关本体 -->
+            <span>长按：回落公共层</span>
+          </label>
+          <div class="faint" id="edit-fallback-hint"></div> <!-- 当前按键是否已映射的提示 -->
+        </section>
       </div>
     </div>
   </div>

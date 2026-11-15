@@ -139,8 +139,10 @@ let prevSelectKey = null; // 上一次「激活按钮」下拉框内容指纹，
 let renameLayerMode = false; // 是否正在重命名操作集
 let renameLayerId = null; // 当前重命名的操作集 id
 let renameLayerValue = ''; // 当前重命名的名称值
-let currentConds = []; // 当前按键的状态条件 [{stateId, expected}]
-let currentLogic = 'or'; // 状态条件组合方式（or / and）
+let currentConds = []; // 当前按键短按的状态条件 [{stateId, expected}]
+let currentLogic = 'or'; // 短按状态条件组合方式（or / and）
+let currentLongConds = []; // 当前按键长按的状态条件
+let currentLongLogic = 'or'; // 长按状态条件组合方式（or / and）
 let currentKeyCode = 0; // 当前按键已配置的键码（切换动作类型时沿用，避免回退成旧类型）
 let currentMouse = 'LEFT'; // 当前按键已配置的鼠标键（切换动作类型时沿用）
 let currentTargets = []; // 当前操作集可切换的目标层（点击「切层」时落到第一个）
@@ -248,7 +250,7 @@ function renderEdit(info, map) {
       if (b.fallback_long === false) fbMarks.push('长按不回落');
     }
     let lines = b.desc
-      ? '<span class="pad-line click">点击: ' + esc(b.desc) + (b.click_layer_only ? '（只切层）' : '') + '</span>' // 点击/主动作
+      ? '<span class="pad-line click">短按: ' + esc(b.desc) + (b.click_layer_only ? '（只切层）' : '') + '</span>' // 短按/主动作
       : '<span class="pad-line none">未映射' + (fbMarks.length ? '（' + fbMarks.join('/') + '）' : '') + '</span>'; // 无映射（标注回落阻断）
     if (b.long_desc) { // 配置了长按动作
       lines += '<span class="pad-line long">长按: ' + esc(b.long_desc) + (b.long_layer_only ? '（只切层）' : '') + '</span>'; // 长按动作单独一行
@@ -283,58 +285,85 @@ function renderEdit(info, map) {
       'onclick="App.toggleSub(' + code + ')">' + label + '</div>' // 点击切换子命令（数字实参无需引号）
     ).join('');
     $('edit-subs-label').textContent = // 子命令标题，显示当前已选数量
-      '子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
+      '短按子命令（最多3个，当前: ' + (map.subs.length ? map.subs.join(' + ') : '无子命令') + '）';
   }
   // 「只切换层」开关：点击开关常显（公共层无切层修饰键，不显示）；长按开关仅在配置了长按动作时显示
   $('edit-click-only-row').style.display = isCommon ? 'none' : 'flex'; // 公共层隐藏点击开关
   $('edit-click-only').checked = map.click_layer_only === true; // 点击开关（缺省关闭）
-  // 「未映射时回落公共层」开关：仅非公共层显示，短按/长按分别控制；缺省都回落
-  $('edit-fallback-click-row').style.display = isCommon ? 'none' : 'flex';
+  // 回落开关：整块仅非公共层显示；短按/长按分别控制，缺省都回落
+  $('edit-fallback-section').style.display = isCommon ? 'none' : '';
   $('edit-fallback-click').checked = selBtn.fallback_click !== false;
-  $('edit-fallback-long-row').style.display = isCommon ? 'none' : 'flex';
   $('edit-fallback-long').checked = selBtn.fallback_long !== false;
+  $('edit-fallback-hint').textContent = map.has_mapping
+    ? '当前按键在本层已有映射，回落开关只在清除本层映射后生效。'
+    : '当前按键在本层未映射：关闭后对应短按/长按不会再使用公共层映射。';
   $('edit-long-only-row').style.display = map.long_press ? 'flex' : 'none'; // 长按未配置时隐藏
   $('edit-long-only').checked = map.long_press_layer_only === true; // 长按开关（缺省关闭）
 
-  renderStateConditions(map); // 渲染状态条件配置区（需求5）
+  renderStateConditions(map); // 渲染短按状态条件配置区
+  renderLongStateConditions(map); // 渲染长按状态条件配置区
   renderLongPress(info, map); // 渲染长按动作配置区（需求2）
 }
 
-// renderStateConditions：渲染「生效状态条件」区，点击状态 chip 在 未选/为真/为假 之间循环
+// renderStateConditions：渲染短按「生效状态条件」区
 function renderStateConditions(map) {
-  const conds = map.state_conditions || []; // 已配置的条件列表
-  currentConds = conds.map((c) => ({ stateId: c.stateId, expected: c.expected })); // 复制到前端状态，供点击时增量修改
+  currentConds = (map.state_conditions || []).map((c) => ({ stateId: c.stateId, expected: c.expected })); // 复制到前端状态，供点击时增量修改
   currentLogic = map.state_logic || 'or'; // or / and
+  renderConditionBlock('edit-states', 'edit-states-label', 'edit-state-logic', currentConds, currentLogic, false);
+}
+
+// renderLongStateConditions：渲染长按「生效状态条件」区
+function renderLongStateConditions(map) {
+  currentLongConds = (map.long_state_conditions || []).map((c) => ({ stateId: c.stateId, expected: c.expected }));
+  currentLongLogic = map.long_state_logic || 'or';
+  renderConditionBlock('edit-long-states', 'edit-long-states-label', 'edit-long-state-logic', currentLongConds, currentLongLogic, true);
+}
+
+// renderConditionBlock：短按/长按共用的状态 chips 渲染
+function renderConditionBlock(chipsId, labelId, logicId, conds, logic, isLong) {
   const byId = {}; // stateId -> expected 便于快速查找
-  currentConds.forEach((c) => { byId[c.stateId] = c.expected; }); // 建立索引
-  $('edit-states').innerHTML = STATE_OPTIONS.map(([id, label]) => { // 遍历 10 个状态生成 chip
+  conds.forEach((c) => { byId[c.stateId] = c.expected; }); // 建立索引
+  const cycleFn = isLong ? 'cycleLongState' : 'cycleState'; // 点击处理函数名
+  const logicFn = isLong ? 'setLongLogic' : 'setLogic'; // 逻辑切换处理函数名
+  $(chipsId).innerHTML = STATE_OPTIONS.map(([id, label]) => { // 遍历 10 个状态生成 chip
     let cls = 'chip'; // 基础样式
     let suffix = ''; // 后缀提示
     if (byId[id] === true) { cls += ' active'; suffix = ' = 真'; } // 期望为真
     else if (byId[id] === false) { cls += ' off'; suffix = ' = 假'; } // 期望为假
-    return '<div class="' + cls + '" onclick="App.cycleState(' + q(id) + ')">' + label + suffix + '</div>'; // 点击循环切换
+    return '<div class="' + cls + '" onclick="App.' + cycleFn + '(' + q(id) + ')">' + label + suffix + '</div>'; // 点击循环切换
   }).join('');
-  $('edit-state-logic').innerHTML = [['or', '逻辑或（任一满足）'], ['and', '逻辑与（全部满足）']].map(([k, label]) => // 组合方式 chip
-    '<div class="chip' + (k === currentLogic ? ' active' : '') + '" onclick="App.setLogic(' + q(k) + ')">' + label + '</div>'
+  $(logicId).innerHTML = [['or', '逻辑或（任一满足）'], ['and', '逻辑与（全部满足）']].map(([k, label]) => // 组合方式 chip
+    '<div class="chip' + (k === logic ? ' active' : '') + '" onclick="App.' + logicFn + '(' + q(k) + ')">' + label + '</div>'
   ).join('');
-  const showLogic = currentConds.length > 1; // 只有多条条件时才需要选择组合方式
-  $('edit-state-logic').style.display = showLogic ? '' : 'none'; // 显隐组合方式行
-  $('edit-states-label').textContent = currentConds.length
-    ? '生效状态条件（当前 ' + currentConds.length + ' 条）'
-    : '生效状态条件（不选则始终生效）';
+  $(logicId).style.display = conds.length > 1 ? '' : 'none'; // 只有多条条件时才需要选择组合方式
+  $(labelId).textContent = (isLong ? '长按' : '短按') + '生效状态条件' + (conds.length
+    ? '（当前 ' + conds.length + ' 条）'
+    : '（不选则始终生效）');
+}
+
+// cycleCondition：状态 chip 的三态循环（未选 -> 为真 -> 为假 -> 未选）并提交后端
+function cycleCondition(conds, logic, stateId, longPress) {
+  const idx = conds.findIndex((c) => c.stateId === stateId); // 查找该状态是否已配置
+  if (idx < 0) conds.push({ stateId: stateId, expected: true }); // 未选 -> 为真
+  else if (conds[idx].expected === true) conds[idx].expected = false; // 为真 -> 为假
+  else conds.splice(idx, 1); // 为假 -> 未选
+  invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: conds, logic: logic, longPress: longPress }); // 提交到后端
+  prevEdit = null; // 强制下一轮重新渲染
 }
 
 // renderLongPress：渲染「长按动作」配置区（仅在当前按键已有主动作时可用）
 function renderLongPress(info, map) {
   const hasMapping = map.has_mapping && editKind !== 'none'; // 无主动作（或已选未设置）时长按无依附对象
   const lp = map.long_press || null; // 已配置的长按动作（ActionView）或 null
-  $('edit-long-label').style.display = hasMapping ? '' : 'none'; // 标题显隐
-  $('edit-long-kinds').style.display = hasMapping ? '' : 'none'; // 类型 chips 显隐
-  $('edit-long-target').style.display = hasMapping ? '' : 'none'; // 目标区显隐
+  const showLongState = !!lp; // 长按状态条件仅在已配置长按动作时显示
+  $('edit-long-section').style.display = hasMapping ? '' : 'none'; // 整块长按区显隐
+  $('edit-long-states-label').style.display = showLongState ? '' : 'none';
+  $('edit-long-states').style.display = showLongState ? '' : 'none';
+  if (!showLongState) $('edit-long-state-logic').style.display = 'none';
   $('edit-long-subs-label').style.display = 'none'; // 先隐藏，下面按条件显示
   $('edit-long-subs').style.display = 'none';
   $('edit-long-ms-row').style.display = lp ? '' : 'none'; // 阈值行仅在已配置长按时显示
-  $('edit-long-clear').style.display = lp ? '' : 'none'; // 取消长按按钮仅在已配置时显示
+  $('edit-long-clear').style.display = lp ? '' : 'none'; // 取消长按按钮仅在已配置长按时显示
   if (!hasMapping) return; // 无主动作则整块隐藏
 
   // 长按动作类型 chips（data-tip 提供悬浮说明）
@@ -427,7 +456,7 @@ function targetHTML(info, kind, act, isLong) {
     const right = px > 0; // 正数向右，负数向左
     const mag = Math.abs(px); // 当前幅度（像素）
     const DEGS = [[400, '90°'], [800, '180°'], [1200, '270°'], [1600, '360°']]; // 幅度档位
-    return '<div class="dim">方向（点击执行一次，无需按住）</div><div class="chips-row">' +
+    return '<div class="dim">方向（按下执行一次，无需按住）</div><div class="chips-row">' +
       '<div class="chip' + (right ? ' active' : '') + '" onclick="App.set' + preset + 'Turn(' + mag + ')">向右</div>' +
       '<div class="chip' + (!right ? ' active' : '') + '" onclick="App.set' + preset + 'Turn(' + (-mag) + ')">向左</div>' +
       '</div><div class="dim">幅度（约）</div><div class="chips-row">' +
@@ -496,18 +525,17 @@ const App = {
     invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'turnaround', keyCode: px, mouseButton: null, layerName: null });
     prevEdit = null; // 强制重新渲染
   },
-  cycleState(stateId) { // 切换某状态的条件：未选 -> 为真 -> 为假 -> 未选
-    const idx = currentConds.findIndex((c) => c.stateId === stateId); // 查找该状态是否已配置
-    if (idx < 0) currentConds.push({ stateId: stateId, expected: true }); // 未选 -> 为真
-    else if (currentConds[idx].expected === true) currentConds[idx].expected = false; // 为真 -> 为假
-    else currentConds.splice(idx, 1); // 为假 -> 未选
-    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentConds, logic: currentLogic }); // 提交到后端
-    prevEdit = null; // 强制下一轮重新渲染
-  },
-  setLogic(logic) { // 切换条件组合方式（逻辑或 / 逻辑与）
+  cycleState(stateId) { cycleCondition(currentConds, currentLogic, stateId, false); }, // 短按状态：未选 -> 为真 -> 为假 -> 未选
+  cycleLongState(stateId) { cycleCondition(currentLongConds, currentLongLogic, stateId, true); }, // 长按状态：同一套循环
+  setLogic(logic) { // 切换短按条件组合方式（逻辑或 / 逻辑与）
     currentLogic = logic; // 更新前端状态
-    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentConds, logic: logic }); // 提交到后端
+    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentConds, logic: logic, longPress: false }); // 提交到后端
     prevEdit = null; // 强制重新渲染
+  },
+  setLongLogic(logic) { // 切换长按条件组合方式
+    currentLongLogic = logic;
+    invoke('set_state_conditions', { layerId: editLayerId, button: selectedButton, conditions: currentLongConds, logic: logic, longPress: true });
+    prevEdit = null;
   },
   clearMapping() { // 清除当前按键映射
     editKind = 'none'; // 同步本地类型为未设置，避免界面仍停留在旧类型

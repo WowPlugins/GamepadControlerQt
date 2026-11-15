@@ -523,6 +523,12 @@ fn mapping_to_json(mapping: &KeyMapping) -> Value {
             "expected": c.expected,
         })).collect::<Vec<Value>>(),
         "stateLogic": mapping.state_logic.as_str(),
+        // 长按动作的状态条件
+        "longStateConditions": mapping.long_state_conditions.iter().map(|c| json!({
+            "stateId": c.state_id,
+            "expected": c.expected,
+        })).collect::<Vec<Value>>(),
+        "longStateLogic": mapping.long_state_logic.as_str(),
     })
 }
 
@@ -591,6 +597,23 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
     let state_logic = StateLogic::from_str(
         obj.get("stateLogic").and_then(|x| x.as_str()).unwrap_or("or"),
     );
+    // 长按动作的状态条件：可选数组，每项为 { stateId, expected }
+    let mut long_conditions: Vec<StateCond> = Vec::new();
+    if let Some(Value::Array(arr)) = obj.get("longStateConditions") {
+        for v in arr {
+            let id = v.get("stateId").and_then(|x| x.as_str()).unwrap_or("");
+            if id.is_empty() {
+                continue;
+            }
+            long_conditions.push(StateCond {
+                state_id: id.to_string(),
+                expected: v.get("expected").and_then(|x| x.as_bool()).unwrap_or(true),
+            });
+        }
+    }
+    let long_state_logic = StateLogic::from_str(
+        obj.get("longStateLogic").and_then(|x| x.as_str()).unwrap_or("or"),
+    );
     // 【Rust 语法】结构体字面量：`action` 是字段名简写——等价于 `action: action`，即变量名与字段名相同可省略冒号部分。
     // 「只切换层」开关：点击缺省 true（默认打开），长按缺省 false
     let click_layer_only = obj
@@ -616,6 +639,8 @@ fn parse_mapping(obj: &Value) -> Option<KeyMapping> {
         long_press_ms,
         state_conditions: conditions,
         state_logic,
+        long_state_conditions: long_conditions,
+        long_state_logic,
         suspend_wasd_auto_lock,
     })
 }

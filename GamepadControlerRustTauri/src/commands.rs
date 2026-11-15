@@ -161,6 +161,8 @@ pub struct MappingView { // 单个按键映射的展示视图
     long_press_ms: u32, // 长按判定阈值（毫秒）
     state_conditions: Vec<StateCondView>, // 状态条件列表
     state_logic: String, // 条件组合方式（or / and）
+    long_state_conditions: Vec<StateCondView>, // 长按动作的状态条件列表
+    long_state_logic: String, // 长按条件组合方式（or / and）
 } // 结构体结束
 
 /// 状态条件的展示/提交视图
@@ -189,6 +191,8 @@ impl MappingView {
             long_press_ms: KeyMapping::DEFAULT_LONG_PRESS_MS, // 长按阈值取默认值
             state_conditions: Vec::new(), // 无条件
             state_logic: "or".into(), // 默认逻辑或
+            long_state_conditions: Vec::new(), // 长按无条件
+            long_state_logic: "or".into(), // 长按默认逻辑或
         } // Self 字面量结束
     } // none 函数结束
 } // impl 块结束
@@ -1118,6 +1122,15 @@ pub fn get_mapping(state: State<'_, AppState>, layer_id: String, button: String)
                 })
                 .collect(), // 状态条件列表
             state_logic: m.state_logic.as_str().to_string(), // or / and
+            long_state_conditions: m
+                .long_state_conditions
+                .iter()
+                .map(|c| StateCondView {
+                    state_id: c.state_id.clone(),
+                    expected: c.expected,
+                })
+                .collect(), // 长按状态条件列表
+            long_state_logic: m.long_state_logic.as_str().to_string(), // 长按 or / and
         }, // 视图构造结束
         None => MappingView::none(), // 无映射则返回空视图
     } // match 结束
@@ -1163,6 +1176,7 @@ pub fn set_state_conditions(
     button: String,
     conditions: Vec<StateCondView>,
     logic: String,
+    long_press: bool,
 ) {
     let Some(b) = controller_button_from_name(&button) else {
         return; // 按钮名无效
@@ -1170,14 +1184,20 @@ pub fn set_state_conditions(
     let mut core = state.shared.core.lock().unwrap();
     if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
         if let Some(m) = layer.button_mappings.get_mut(&b) {
-            m.state_conditions = conditions
+            let conds: Vec<StateCond> = conditions
                 .into_iter()
                 .map(|c| StateCond {
                     state_id: c.state_id,
                     expected: c.expected,
                 })
                 .collect();
-            m.state_logic = StateLogic::from_str(&logic);
+            if long_press {
+                m.long_state_conditions = conds; // 写入长按条件
+                m.long_state_logic = StateLogic::from_str(&logic);
+            } else {
+                m.state_conditions = conds; // 写入短按条件
+                m.state_logic = StateLogic::from_str(&logic);
+            }
             core.profile_rev += 1;
         }
     }
@@ -1213,6 +1233,8 @@ pub fn set_long_press(
             } else {
                 m.long_press = None; // 取消长按
                 m.long_press_subs.clear(); // 清理长按子命令
+                m.long_state_conditions.clear(); // 取消长按后条件无依附对象，一并清理
+                m.long_state_logic = StateLogic::Or;
             }
             core.profile_rev += 1;
         }

@@ -17,7 +17,7 @@ use crate::core::injector::InputInjector;
 // 【Rust 语法】`use ...::{A, B}`：同时导入 mapper 模块下的 LookState 和 MapperState 两个类型。
 use crate::core::mapper::{LookState, MapperState};
 // 【Rust 语法】一次导入三个类型：ControllerProfile（配置）、GlobalSettings（全局设置）、OperationSet（操作集）。
-use crate::core::mapping_types::{ControllerProfile, GlobalSettings, OperationSet};
+use crate::core::mapping_types::{ControllerProfile, GlobalSettings, MappedAction, OperationSet};
 // 【Rust 语法】导入 steam_input 模块下的 ButtonDispatch（按钮分发枚举）和 SteamInput（映射引擎）。
 use crate::core::steam_input::{ButtonDispatch, SteamInput};
 // 【Rust 语法】导入 UiEvent（UI 事件枚举，用于向前端发送事件）。
@@ -118,20 +118,45 @@ impl AppCore {
                         mapping,
                         layer_id,
                     } => {
-                        // 状态条件不满足时跳过"按下"；松开必须放行，否则按键会卡住
+                        // 状态条件：短按与长按分别判断。
+                        // 松开必须放行，否则按键会卡住。
                         let states = Arc::clone(&self.states);
-                        let allowed = !is_pressed
-                            || mapping.state_allows(|id| states.get(id));
-                        if allowed {
+                        if is_pressed {
+                            let click_ok = mapping.state_allows(|id| states.get(id));
+                            let has_long = mapping.long_press.is_some();
+                            let long_ok = mapping.long_state_allows(|id| states.get(id));
+                            if click_ok || (has_long && long_ok) {
+                                // 按条件过滤本次实际执行的映射：
+                                // - 短按条件不满足 -> 主动作换成空动作，仅保留长按
+                                // - 长按条件不满足 -> 去掉长按，短按按下立即执行
+                                let mut effective = mapping.clone();
+                                if !click_ok {
+                                    effective.action = MappedAction::mouse_move();
+                                    effective.sub_commands.clear();
+                                }
+                                if has_long && !long_ok {
+                                    effective.long_press = None;
+                                    effective.long_press_subs.clear();
+                                }
+                                let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（状态宏居中用）
+                                self.mapper.handle_button(
+                                    TriggerId::Pad(button),
+                                    true,
+                                    &effective,
+                                    &layer_id,
+                                    self.injector.as_ref(),
+                                    &self.event_tx,
+                                    self.look.as_ref(),
+                                    &wow_exe,
+                                );
+                            }
+                        } else {
                             let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（状态宏居中用）
-                            // 调用 mapper 处理按钮注入（传入按钮、状态、映射、来源层、注入器、事件发送端与视角状态）。
                             self.mapper.handle_button(
                                 TriggerId::Pad(button),
-                                is_pressed,
-                                // `&mapping` 传入映射的借用。
+                                false,
                                 &mapping,
                                 &layer_id,
-                                // 【Rust 语法】`injector.as_ref()`：把 Arc<InputInjector> 转成 &InputInjector 引用传给方法。
                                 self.injector.as_ref(),
                                 &self.event_tx,
                                 self.look.as_ref(),
