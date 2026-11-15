@@ -746,6 +746,42 @@ body::before {
 }
 .check-row input { accent-color: #7fc9c4; } /* 勾选框使用主题青色 */
 
+/* ---- 调试日志窗口 ---- */
+.log-view {
+  flex: 1; /* 占满剩余高度 */
+  min-height: 0; /* 允许内部滚动 */
+  overflow-y: auto; /* 纵向滚动 */
+  padding: 8px 10px; /* 内边距 */
+  background: #1e2024; /* 比窗口背景更暗，突出日志 */
+  border: 1px solid #3f434a; /* 描边 */
+  border-radius: 10px; /* 圆角 */
+  font-family: Consolas, "Cascadia Mono", monospace; /* 等宽字体 */
+  font-size: 12px; /* 字号 */
+  line-height: 1.55; /* 行高 */
+  user-select: text; /* 允许选中复制日志 */
+}
+.log-line {
+  display: flex; /* 时间与正文同一行 */
+  gap: 8px; /* 间距 */
+  white-space: pre-wrap; /* 保留日志中的换行与空格 */
+  word-break: break-all; /* 长内容自动换行 */
+}
+.log-line:hover { background: rgba(255, 255, 255, 0.03); } /* 悬停高亮当前行 */
+.log-time {
+  color: #6c727c; /* 时间弱化 */
+  flex-shrink: 0; /* 不压缩时间列 */
+}
+.log-text { color: #cfd3da; } /* 普通日志颜色 */
+.log-line.warn .log-text { color: #f0c36a; } /* 警告/提示 */
+.log-line.error .log-text { color: #f07a7a; } /* 错误/失败 */
+.log-empty { padding: 24px 0; text-align: center; } /* 空状态提示 */
+.log-footer {
+  display: flex; /* 左右分布 */
+  justify-content: space-between; /* 两端对齐 */
+  flex-shrink: 0; /* 不压缩 */
+}
+.log-status { cursor: default; } /* 状态 chip 不可点击 */
+
 /* ---- 物理键盘映射视图 ---- */
 .kb-combo {
   flex: 1; /* 占满剩余宽度 */

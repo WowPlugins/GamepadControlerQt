@@ -1,0 +1,34 @@
+<!DOCTYPE html> <!-- 声明文档类型为 HTML5 -->
+<html lang="zh-CN"> <!-- 页面语言为简体中文 -->
+<head> <!-- 头部：页面元信息与资源引用 -->
+  <meta charset="UTF-8"> <!-- 字符编码 UTF-8（源码含中文必须） -->
+  <title>调试日志</title> <!-- 浏览器标签页标题 -->
+  <link rel="stylesheet" href="style.css"> <!-- 引入全局样式表（与主窗口同主题） -->
+</head>
+<body>
+  <!-- 独立「调试日志」窗口：由主窗口 WebviewWindow("log-win") 打开 -->
+  <div class="root"> <!-- 根容器：flex 纵向布局 -->
+    <div class="edit-header"> <!-- 顶部标题栏 -->
+      <div class="edit-title">调试日志</div> <!-- 窗口标题 -->
+      <span id="log-status" class="chip log-status">已关闭</span> <!-- 日志开关状态 -->
+      <label class="check-row"> <!-- 自动滚动开关 -->
+        <input type="checkbox" id="log-auto-scroll" checked> <!-- 默认开启自动滚动 -->
+        <span>自动滚动</span>
+      </label>
+      <button class="btn" id="log-copy">拷贝全部</button> <!-- 复制当前窗口内全部日志 -->
+      <button class="btn" id="log-clear">清空</button> <!-- 清空日志缓冲 -->
+      <button class="btn" id="log-close">关闭</button> <!-- 关闭本窗口 -->
+    </div>
+
+    <div id="log-view" class="log-view"> <!-- 日志滚动区 -->
+      <div id="log-empty" class="log-empty faint">暂无日志，开启「调试日志」后这里会实时显示</div> <!-- 空状态提示 -->
+    </div>
+
+    <div class="log-footer"> <!-- 底部信息栏 -->
+      <span id="log-count" class="faint">0 条</span> <!-- 当前条数与丢弃条数 -->
+      <span id="log-tip" class="faint">日志仅在「调试日志」开启时产生</span> <!-- 状态提示 -->
+    </div>
+  </div> <!-- /root 结束 -->
+  <script src="log.js"></script> <!-- 日志窗口逻辑 -->
+</body>
+</html>

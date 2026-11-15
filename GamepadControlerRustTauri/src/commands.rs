@@ -642,7 +642,7 @@ pub fn set_state_pixel_pos(state: State<'_, AppState>, x: i32, y: i32) {
     crate::dbg_log!("像素锚点 -> ({}, {})", x.max(0), y.max(0));
 }
 
-// 设置调试日志开关（开启时分配控制台窗口并开始输出日志）
+// 设置调试日志开关（开启后写入内存缓冲，由「调试日志」窗口展示）
 #[tauri::command]
 pub fn set_debug_log(state: State<'_, AppState>, enabled: bool) {
     let (read_enabled, interval, px, py) = {
@@ -659,8 +659,8 @@ pub fn set_debug_log(state: State<'_, AppState>, enabled: bool) {
         info
     };
     if enabled {
-        crate::core::debug_log::set_enabled(true); // 先打开开关（后续日志才能输出）
-        crate::dbg_log!("调试日志已开启");
+        crate::core::debug_log::set_enabled(true); // 先打开开关（后续日志才能写入）
+        crate::dbg_log!("调试日志已开启（输出到日志窗口）");
         crate::dbg_log!(
             "状态读取 启用={} 周期={}ms 锚点=({}, {})",
             read_enabled,
@@ -673,8 +673,20 @@ pub fn set_debug_log(state: State<'_, AppState>, enabled: bool) {
         }
     } else {
         crate::dbg_log!("调试日志已关闭"); // 关闭前输出最后一条
-        crate::core::debug_log::set_enabled(false); // 再关闭开关并收起控制台
+        crate::core::debug_log::set_enabled(false); // 再关闭开关
     }
+}
+
+// 增量读取调试日志（seq > after）
+#[tauri::command]
+pub fn get_logs(after: u64) -> crate::core::debug_log::LogPage {
+    crate::core::debug_log::page(after)
+}
+
+// 清空调试日志缓冲
+#[tauri::command]
+pub fn clear_logs() {
+    crate::core::debug_log::clear();
 }
 
 // ---------------------------------------------------------------------

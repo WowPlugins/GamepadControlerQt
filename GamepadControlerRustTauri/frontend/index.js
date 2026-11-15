@@ -54,6 +54,7 @@ let stateReadEnabled = false;  // 是否启用角色状态读取（来自后端�
 let stateReadInterval = 50;    // 状态读取周期（毫秒）
 let stateBits = 0;             // 当前 10 个状态位图（bit0..bit9）
 let debugLogEnabled = false;   // 调试日志开关（来自后端设置）
+let logAutoOpened = false;     // 启动后是否已根据配置自动打开过日志窗口
 
 let prevMain = null;           // 上一次渲染的快照 JSON 串，用于对比避免重复渲染
 
@@ -169,6 +170,10 @@ function renderMain(snap) {
 
   // 调试日志开关（开启后后端分配控制台并输出像素读取日志）
   debugLogEnabled = !!snap.debug_log; // 同步开关状态
+  if (debugLogEnabled && !logAutoOpened) { // 启动时配置为开启 → 自动打开日志窗口
+    logAutoOpened = true;
+    openLogWindow();
+  }
   const debugBtn = $('btn-debug-log'); // 开关按钮
   debugBtn.textContent = debugLogEnabled ? '已开启' : '已关闭'; // 按钮文案
   debugBtn.className = 'btn' + (debugLogEnabled ? ' active' : ''); // 开启时高亮
@@ -259,6 +264,29 @@ function openKeymacroWindow() {
       visible: false,      // 先隐藏，页面渲染完成后由 keymacro.js 调用 show() 再显示
     });
     win.once('tauri://error', (e) => console.error('键盘映射窗口创建失败:', e)); // 监听创建失败事件并打印
+  });
+}
+
+// openLogWindow：打开「调试日志」独立窗口（不存在则新建，已存在则复用聚焦）
+function openLogWindow() {
+  WebviewWindow.getByLabel('log-win').then((existing) => { // 异步查找日志窗口
+    if (existing) { // 已存在 → 复用
+      existing.show(); // 显示窗口
+      existing.setFocus(); // 置顶聚焦
+      return;
+    }
+    const win = new WebviewWindow('log-win', { // 创建日志窗口
+      url: 'log.html',    // 加载日志页面
+      title: '调试日志',  // 窗口标题
+      width: 820,         // 窗口宽度
+      height: 560,        // 窗口高度
+      minWidth: 600,      // 最小宽度
+      minHeight: 380,     // 最小高度
+      center: true,       // 创建后居中
+      backgroundColor: '#26282c', // 窗口背景色（避免打开瞬间白屏闪动）
+      visible: false,     // 首帧渲染完成后再由 log.js 显示
+    });
+    win.once('tauri://error', (e) => console.error('日志窗口创建失败:', e));
   });
 }
 
@@ -374,11 +402,14 @@ const App = {
     prevMain = null; // 强制下一轮重新渲染
   },
 
-  toggleDebugLog() { // 开关调试日志（开启后弹出控制台并输出像素读取信息）
-    invoke('set_debug_log', { enabled: !debugLogEnabled }) // 取反后提交
+  toggleDebugLog() { // 开关调试日志（开启后日志写入应用内日志窗口）
+    const next = !debugLogEnabled; // 目标状态
+    invoke('set_debug_log', { enabled: next }) // 提交开关
+      .then(() => { if (next) openLogWindow(); }) // 开启时同时打开日志窗口，替代原来的控制台
       .catch((e) => console.error('set_debug_log:', e));
     prevMain = null; // 强制下一轮重新渲染
   },
+  openLog() { openLogWindow(); }, // 打开调试日志窗口
   adjustStateInterval(delta) { // 调整状态读取周期（10~2000ms）
     const next = Math.min(2000, Math.max(10, stateReadInterval + delta)); // 限幅
     invoke('set_state_read_interval', { ms: next }) // 提交新周期
@@ -417,6 +448,7 @@ $('btn-reset').addEventListener('click', () => App.resetConfig()); // 重置默�
 $('btn-overlay').addEventListener('click', () => App.toggleOverlay()); // 显示/关闭悬浮窗
 $('btn-help').addEventListener('click', () => App.openHelp()); // 打开使用说明
 $('btn-keymacro').addEventListener('click', () => App.openKeymacro()); // 打开物理键盘映射
+$('btn-open-log').addEventListener('click', () => App.openLog()); // 打开调试日志窗口
 $('btn-wow').addEventListener('click', () => App.pickWow()); // 浏览选择目标游戏 exe
 $('wow-exe-select').addEventListener('change', (e) => App.selectWow(e.target.value)); // 从历史记录选择目标 exe
 $('btn-quit').addEventListener('click', () => App.quit()); // 退出程序

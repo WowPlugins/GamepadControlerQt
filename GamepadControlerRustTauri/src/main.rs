@@ -78,7 +78,7 @@ fn main() { // 程序主入口
     let shared = Arc::new(ui::shared::AppShared::new()); // 构建跨线程共享的核心状态
     { // 【Rust 语法】独立代码块：限定变量作用域，使锁在块结束时自动释放
         let profile = core::config_manager::load(); // 从 exe 同目录加载配置文件，返回 ControllerProfile
-        // 按配置恢复调试日志开关（默认关闭；开启时会分配控制台窗口）
+        // 按配置恢复调试日志开关（默认关闭；开启时日志写入内存缓冲，由日志窗口展示）
         core::debug_log::set_enabled(profile.global_settings.debug_log);
         // 【Rust 语法】if-let 模式匹配：尝试获取 Mutex 锁；Ok 则解出可变引用 core，Err（锁中毒）则整块跳过
         if let Ok(mut core) = shared.core.lock() { // 加锁成功后取得核心的可变访问
@@ -154,6 +154,8 @@ fn main() { // 程序主入口
             commands::set_state_read_interval, // 设置状态读取周期
             commands::set_state_pixel_pos, // 设置像素锚点坐标
             commands::set_debug_log, // 设置调试日志开关
+            commands::get_logs, // 增量读取调试日志
+            commands::clear_logs, // 清空调试日志
             commands::set_long_press_ms, // 设置长按判定阈值
             commands::toggle_long_press_sub, // 切换长按子命令
             commands::pick_wow_exe, // 浏览选择 WoW 可执行文件

@@ -66,7 +66,8 @@
         </div>
         <div class="slider-row"> <!-- 调试日志开关行 -->
           <div class="slider-label">调试日志</div> <!-- 名称 -->
-          <button class="btn" id="btn-debug-log" onclick="App.toggleDebugLog()">已关闭</button> <!-- 开启后弹出控制台并输出像素读取日志 -->
+          <button class="btn" id="btn-debug-log" onclick="App.toggleDebugLog()">已关闭</button> <!-- 开启后日志写入应用内日志窗口 -->
+          <button class="btn" id="btn-open-log" onclick="App.openLog()">查看日志</button> <!-- 打开独立日志窗口 -->
         </div>
         <div class="dim">悬浮窗</div> <!-- 悬浮窗设置区标题 -->
         <div class="slider-row"> <!-- 透明度调整行 -->
