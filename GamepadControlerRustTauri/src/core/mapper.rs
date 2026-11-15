@@ -194,7 +194,7 @@ pub struct MapperState {
     /// 快捷键切换的右键视角锁定（锁定：光标移出画面 + 按住右键；再按一次解锁）
     pub right_look_locked: bool,
     /// 状态宏（解锁+居中+按键）后临时禁用 WASD 自动锁定，
-    /// 直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后恢复并重新锁定右键（鼠标右键不触发）
+    /// 直到鼠标点击 / Esc / 键盘点击 / 释放鼠标锁存后恢复并重新锁定右键
     pub wasd_auto_lock_suspended: bool,
     /// WASD 自动锁定的延迟恢复时刻：鼠标左右键松开后延迟恢复，
     /// 避免恢复时移动光标影响游戏对本次点击落点的判定（否则表现为"左键没效果"）
@@ -467,9 +467,9 @@ impl MapperState {
         if let Some(mb) = self.pressed_mouse_buttons.remove(&button) {
             injector.send_mouse_up(mb); // 发送鼠标键抬起
             self.pressed_mouse_layer.remove(&button); // 清理来源层标记
-            // 状态宏后的指向手势：左键点击松开后才恢复 WASD 自动锁定（右键不参与）。
+            // 状态宏后的指向手势：鼠标点击松开后才恢复 WASD 自动锁定（左右键都算指向结束）。
             // 延迟到 tick 执行：立即移动光标会让游戏把本次点击判到屏幕边缘（表现为左键没效果）。
-            if mb == MouseButton::Left && self.wasd_auto_lock_suspended {
+            if self.wasd_auto_lock_suspended {
                 self.wasd_resume_at = Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS));
             }
         } // 结束 if let 分支
@@ -799,8 +799,8 @@ impl MapperState {
                 mb, // 鼠标键
                 active: true, // 标记为激活
             }); // 结束事件构造与发送
-            // 状态宏后的指向手势：左键锁存解除（点击完成）后延迟恢复 WASD 自动锁定（右键不参与）
-            if mb == MouseButton::Left && self.wasd_auto_lock_suspended {
+            // 状态宏后的指向手势：鼠标锁存建立（指向完成）后延迟恢复 WASD 自动锁定（左右键均可）
+            if self.wasd_auto_lock_suspended {
                 self.wasd_resume_at = Some(Instant::now() + Duration::from_millis(UNLOCK_SETTLE_MS));
             }
         } // 结束 else 分支
@@ -880,7 +880,7 @@ impl MapperState {
         }
 
         // 4) 「临时禁用 WASD 自动锁定」：指向型技能期间 WASD 不再自动锁定右键，
-        //    直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后由 resume_wasd_auto_lock 恢复（鼠标右键不触发）。
+        //    直到鼠标点击 / Esc / 键盘点击 / 释放鼠标锁存后由 resume_wasd_auto_lock 恢复。
         if suspend_wasd_auto_lock {
             // 本次触发前已处于暂停中：相当于暂停期间又按了一次键盘按键（状态宏自身就注入该键），
             // 按「键盘点击」处理，延迟恢复 WASD 自动锁定；首次触发则保持暂停等待指向手势
@@ -896,7 +896,7 @@ impl MapperState {
     } // 结束 handle_state_macro 函数
 
     /// 恢复 WASD 自动锁定：把光标移出画面左下角并重新按下右键（与 WASD 拦截建立锁定的行为一致）。
-    /// 由状态宏后的指向手势结束时触发（左键点击 / Esc / 键盘点击 / 释放鼠标锁存）。
+    /// 由状态宏后的指向手势结束时触发（鼠标点击 / Esc / 键盘点击 / 释放鼠标锁存）。
     pub fn resume_wasd_auto_lock(&mut self, injector: &InputInjector) {
         if !self.wasd_auto_lock_suspended {
             return; // 未被状态宏临时禁用

@@ -1,7 +1,7 @@
 /* =====================================================================
    log.js —— 独立「调试日志」窗口（WebviewWindow "log-win"）
-   每 250ms 增量拉取后端内存日志缓冲，追加到滚动区。
-   替代原来的控制台窗口：开关打开后日志直接显示在应用内。
+   打开时先读取后端日志文件（debug.log）展示已有内容，
+   之后每 250ms 增量拉取内存日志缓冲，追加新产生的日志。
    ===================================================================== */
 
 // 解构出 Tauri invoke（调用后端 Rust 命令）
@@ -11,6 +11,7 @@ const { getCurrentWindow } = window.__TAURI__.window;
 
 let lastSeq = 0; // 已拉取到的最新日志序号
 let autoScroll = true; // 是否自动滚动到底部
+let ready = false; // 日志文件加载完成前跳过增量轮询
 const MAX_DOM_LINES = 3000; // 前端最多保留的日志行数（与后端缓冲一致）
 
 // $：按 id 获取 DOM 元素的简写
@@ -25,8 +26,10 @@ function classify(text) {
 
 // updateEmpty：根据是否存在日志行切换空状态提示
 function updateEmpty() {
+  const empty = $('log-empty');
+  if (!empty) return; // 空状态占位不存在（已有日志行）时无需处理
   const hasLines = $('log-view').querySelector('.log-line') !== null;
-  $('log-empty').style.display = hasLines ? 'none' : 'block';
+  empty.style.display = hasLines ? 'none' : 'block';
 }
 
 // appendEntries：把新增日志追加到滚动区
@@ -68,8 +71,40 @@ function renderStatus(page) {
   $('log-tip').textContent = page.enabled ? '实时追加中' : '日志已关闭，仍可查看历史记录';
 }
 
+// loadFromFile：窗口打开时直接展示日志文件内容（程序启动时已清空旧日志）
+async function loadFromFile() {
+  const lines = await invoke('read_log_file'); // 后端读取 debug.log 的最后若干行
+  const view = $('log-view');
+  const empty = $('log-empty'); // 保留空状态占位（有日志时由 updateEmpty 隐藏）
+  view.innerHTML = ''; // 丢掉旧内容
+  if (empty) view.appendChild(empty);
+  const frag = document.createDocumentFragment();
+  for (const raw of lines) {
+    const line = document.createElement('div');
+    line.className = 'log-line ' + classify(raw);
+    const m = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s{2}(.*)$/.exec(raw); // 拆分「时间  正文」
+    const time = document.createElement('span');
+    time.className = 'log-time';
+    time.textContent = m ? m[1] : '';
+    const text = document.createElement('span');
+    text.className = 'log-text';
+    text.textContent = m ? m[2] : raw; // textContent 避免日志内容被当作 HTML
+    line.appendChild(time);
+    line.appendChild(text);
+    frag.appendChild(line);
+  }
+  view.appendChild(frag);
+  updateEmpty();
+  view.scrollTop = view.scrollHeight; // 打开时定位到最新一条
+  // 文件内容即已展示部分：把序号对齐到内存缓冲末尾，后续 tick 只追加新日志
+  const page = await invoke('get_logs', { after: 0 });
+  lastSeq = page.next;
+  renderStatus(page);
+}
+
 // tick：增量拉取日志
 async function tick() {
+  if (!ready) return; // 文件尚未加载完成
   try {
     const page = await invoke('get_logs', { after: lastSeq }); // 只取新日志
     lastSeq = page.next; // 记录最新序号
@@ -153,16 +188,14 @@ $('log-auto-scroll').addEventListener('change', () => {
 // ---- 窗口显示策略 ----
 setInterval(tick, 250); // 每 250ms 增量拉取一次
 
-if (!new URLSearchParams(location.search).has('prewarm')) { // 非预热窗口才自动显示
-  (async () => {
-    try {
-      await tick(); // 先渲染首帧
-    } catch (e) {
-      console.error('首帧渲染失败:', e);
-    }
-    getCurrentWindow().show(); // 内容就绪后再显示
-  })();
-  setTimeout(() => getCurrentWindow().show(), 1500); // 兜底显示
-} else {
-  tick(); // 预热窗口只加载数据
-}
+(async () => {
+  try {
+    await loadFromFile(); // 打开窗口先展示日志文件已有内容
+  } catch (e) {
+    console.error('读取日志文件失败:', e); // 读取失败不影响后续实时日志
+  }
+  ready = true; // 允许增量轮询
+  await tick(); // 补上加载文件期间新增的日志
+  getCurrentWindow().show(); // 内容就绪后再显示
+})();
+setTimeout(() => getCurrentWindow().show(), 1500); // 兜底显示

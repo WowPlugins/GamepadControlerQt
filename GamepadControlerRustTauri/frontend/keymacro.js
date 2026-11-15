@@ -255,7 +255,7 @@ function targetHTML(rule, kind) {
     if (kind === 'statemacro') {
       html += '<div class="dim" style="margin-top:8px;">指向型技能</div><div class="chips-row">' +
         '<div class="chip' + (rule.suspendWasdAutoLock ? ' active' : '') + '" ' +
-        'data-tip="打开后：状态宏执行期间 WASD 不自动锁定右键；左键点击 / Esc / 键盘点击 / 释放鼠标锁存后，光标移到画面左下角外并重新锁定右键，恢复 WASD 自动锁定（鼠标右键不触发）" ' +
+        'data-tip="打开后：状态宏执行期间 WASD 不自动锁定右键；鼠标点击 / Esc / 键盘点击 / 释放鼠标锁存后，光标移到画面左下角外并重新锁定右键，恢复 WASD 自动锁定" ' +
         'onclick="App.toggleSuspendWasdLock()">临时禁用 WASD 自动锁定</div></div>';
     }
     return html;

@@ -1,19 +1,23 @@
 // =====================================================================
-// debug_log.rs —— 调试日志开关与内存日志缓冲
+// debug_log.rs —— 调试日志开关、内存日志缓冲与日志文件
 //
-// 默认关闭。开启后日志不再分配控制台窗口，而是写入内存环形缓冲，
-// 由前端「调试日志」窗口通过 get_logs 命令轮询展示。
+// 默认关闭。开启后日志同时写入内存环形缓冲和 exe 同目录的 debug.log；
+// 「调试日志」窗口打开时直接读取日志文件内容展示，之后增量轮询内存缓冲。
+// 程序每次启动会清空上一次运行留下的日志文件。
 // 日志点统一使用 crate::dbg_log! 宏：开关关闭时连格式化都不会执行。
 // =====================================================================
 
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
-/// 内存中最多保留的日志条数，超出后丢弃最旧的
-const MAX_LINES: usize = 3000;
+/// 内存中最多保留的日志条数，超出后丢弃最旧的（日志窗口一次性展示的行数上限）
+pub const MAX_LINES: usize = 3000;
 
 // 日志总开关（原子量，任意线程可读写）
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -59,6 +63,47 @@ fn store() -> &'static Mutex<LogStore> {
     })
 }
 
+/// 日志文件路径：exe 同目录 debug.log（与配置文件位置一致）
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// 取日志文件路径（首次调用时解析，后续复用）
+fn log_path() -> &'static PathBuf {
+    LOG_PATH.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("debug.log")))
+            .unwrap_or_else(|| PathBuf::from("debug.log"))
+    })
+}
+
+/// 程序启动时调用：清空上一次运行留下的日志文件
+pub fn reset_file() {
+    let _ = File::create(log_path()); // 创建 / 截断为空文件
+}
+
+/// 追加一行到日志文件（失败时忽略，日志不能影响主流程）
+fn append_file(time: &str, text: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
+        let _ = writeln!(f, "{}  {}", time, text); // 时间与正文用两个空格分隔（日志窗口按此拆分）
+    }
+}
+
+/// 读取日志文件最后 max 行（日志窗口打开时展示）
+pub fn read_tail(max: usize) -> Vec<String> {
+    let file = match File::open(log_path()) {
+        Ok(f) => f, // 文件存在
+        Err(_) => return Vec::new(), // 尚未产生日志
+    };
+    let mut lines: VecDeque<String> = VecDeque::with_capacity(max.min(MAX_LINES)); // 只保留最后 max 行
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if lines.len() >= max {
+            lines.pop_front(); // 超出上限时丢弃最旧的一行
+        }
+        lines.push_back(line);
+    }
+    lines.into_iter().collect()
+}
+
 /// 日志开关是否打开
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
@@ -82,6 +127,7 @@ fn now_string() -> String {
 pub fn print(args: std::fmt::Arguments) {
     let time = now_string();
     let text = format!("{}", args);
+    append_file(&time, &text); // 写入日志文件（日志窗口打开时按文件内容展示）
     let mut s = store().lock().unwrap_or_else(|e| e.into_inner());
     s.next_seq += 1;
     let entry = LogEntry {
@@ -114,11 +160,14 @@ pub fn page(after: u64) -> LogPage {
     }
 }
 
-/// 清空日志缓冲（序号不重置，避免前端增量拉取错位）
+/// 清空日志缓冲与日志文件（序号不重置，避免前端增量拉取错位）
 pub fn clear() {
-    let mut s = store().lock().unwrap_or_else(|e| e.into_inner());
-    s.entries.clear();
-    s.dropped = 0;
+    {
+        let mut s = store().lock().unwrap_or_else(|e| e.into_inner());
+        s.entries.clear();
+        s.dropped = 0;
+    }
+    let _ = File::create(log_path()); // 同时清空日志文件
 }
 
 /// 调试日志宏：开关打开时才格式化并写入内存缓冲

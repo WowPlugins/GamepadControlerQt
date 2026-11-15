@@ -308,8 +308,8 @@ pub struct KeyMapping {
     /// 长按状态条件的组合方式
     pub long_state_logic: StateLogic,
     /// 「临时禁用 WASD 自动锁定」开关（仅状态宏动作生效，默认打开）：
-    /// 状态宏执行后暂停 WASD 自动锁定，直到左键点击 / Esc / 键盘点击 / 释放鼠标锁存后，
-    /// 再把光标移出画面左下角并重新锁定右键（鼠标右键不触发）。
+    /// 状态宏执行后暂停 WASD 自动锁定，直到鼠标点击 / Esc / 键盘点击 / 释放鼠标锁存后，
+    /// 再把光标移出画面左下角并重新锁定右键。
     pub suspend_wasd_auto_lock: bool,
 } // 结束 KeyMapping 结构体定义
 

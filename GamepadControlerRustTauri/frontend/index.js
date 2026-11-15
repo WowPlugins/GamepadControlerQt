@@ -402,10 +402,9 @@ const App = {
     prevMain = null; // 强制下一轮重新渲染
   },
 
-  toggleDebugLog() { // 开关调试日志（开启后日志写入应用内日志窗口）
+  toggleDebugLog() { // 开关调试日志（开启后日志写入 debug.log，不自动弹窗）
     const next = !debugLogEnabled; // 目标状态
     invoke('set_debug_log', { enabled: next }) // 提交开关
-      .then(() => { if (next) openLogWindow(); }) // 开启时同时打开日志窗口，替代原来的控制台
       .catch((e) => console.error('set_debug_log:', e));
     prevMain = null; // 强制下一轮重新渲染
   },

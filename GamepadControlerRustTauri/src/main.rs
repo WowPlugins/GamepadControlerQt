@@ -74,11 +74,13 @@ fn main() { // 程序主入口
     let _ = _single_instance; // 显式消费变量，避免未使用警告（让句柄存活到 main 结束）
 
     // ---- 1. 构建共享状态并加载配置 ----
+    // 每次启动先清空上一次运行留下的日志文件（日志窗口展示的就是本次运行的日志）
+    core::debug_log::reset_file();
     // 【Rust 语法】:: 路径调用：ui::shared::AppShared::new() 是模块内类型上的关联函数；Arc::new 把对象放堆上并共享所有权
     let shared = Arc::new(ui::shared::AppShared::new()); // 构建跨线程共享的核心状态
     { // 【Rust 语法】独立代码块：限定变量作用域，使锁在块结束时自动释放
         let profile = core::config_manager::load(); // 从 exe 同目录加载配置文件，返回 ControllerProfile
-        // 按配置恢复调试日志开关（默认关闭；开启时日志写入内存缓冲，由日志窗口展示）
+        // 按配置恢复调试日志开关（默认关闭；开启时日志写入 debug.log 与内存缓冲）
         core::debug_log::set_enabled(profile.global_settings.debug_log);
         // 【Rust 语法】if-let 模式匹配：尝试获取 Mutex 锁；Ok 则解出可变引用 core，Err（锁中毒）则整块跳过
         if let Ok(mut core) = shared.core.lock() { // 加锁成功后取得核心的可变访问
@@ -155,6 +157,7 @@ fn main() { // 程序主入口
             commands::set_state_pixel_pos, // 设置像素锚点坐标
             commands::set_debug_log, // 设置调试日志开关
             commands::get_logs, // 增量读取调试日志
+            commands::read_log_file, // 读取日志文件（日志窗口打开时展示）
             commands::clear_logs, // 清空调试日志
             commands::set_long_press_ms, // 设置长按判定阈值
             commands::toggle_long_press_sub, // 切换长按子命令
