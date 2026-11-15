@@ -213,6 +213,7 @@ function renderEdit(info, map) {
   currentMouse = map.mouse_button || 'LEFT'; // 记录当前鼠标键
   currentTargets = info.switch_targets || []; // 记录可切换的目标层
   const btnDisplay = (info.buttons.find((b) => b.name === selectedButton) || {}).display || selectedButton; // 当前选中按键的显示名
+  const selBtn = info.buttons.find((b) => b.name === selectedButton) || {}; // 当前选中按键的网格数据（含回落开关）
   $('edit-title').textContent = '编辑层: ' + info.layer_name; // 标题显示层名
   $('edit-current').textContent = '当前: ' + btnDisplay + ' (' + map.desc + ')'; // 显示当前按键与其映射描述
   // 公共层恒为激活层，不存在"激活按钮"：隐藏该控件（写入公共层的切层映射是无效动作，
@@ -241,9 +242,14 @@ function renderEdit(info, map) {
   $('edit-grid').innerHTML = info.buttons.map((b) => { // 遍历所有手柄按键生成网格按钮
     // 映射行：未映射显示灰色"未映射"；有长按动作时单独一行标注，与点击区分
     // 打开「只切换层」时在对应行追加标记，便于一眼区分
+    const fbMarks = []; // 回落阻断标记
+    if (!isCommon) { // 公共层不显示回落信息
+      if (b.fallback_click === false) fbMarks.push('短按不回落');
+      if (b.fallback_long === false) fbMarks.push('长按不回落');
+    }
     let lines = b.desc
       ? '<span class="pad-line click">点击: ' + esc(b.desc) + (b.click_layer_only ? '（只切层）' : '') + '</span>' // 点击/主动作
-      : '<span class="pad-line none">未映射</span>'; // 无映射
+      : '<span class="pad-line none">未映射' + (fbMarks.length ? '（' + fbMarks.join('/') + '）' : '') + '</span>'; // 无映射（标注回落阻断）
     if (b.long_desc) { // 配置了长按动作
       lines += '<span class="pad-line long">长按: ' + esc(b.long_desc) + (b.long_layer_only ? '（只切层）' : '') + '</span>'; // 长按动作单独一行
     }
@@ -282,6 +288,11 @@ function renderEdit(info, map) {
   // 「只切换层」开关：点击开关常显（公共层无切层修饰键，不显示）；长按开关仅在配置了长按动作时显示
   $('edit-click-only-row').style.display = isCommon ? 'none' : 'flex'; // 公共层隐藏点击开关
   $('edit-click-only').checked = map.click_layer_only === true; // 点击开关（缺省关闭）
+  // 「未映射时回落公共层」开关：仅非公共层显示，短按/长按分别控制；缺省都回落
+  $('edit-fallback-click-row').style.display = isCommon ? 'none' : 'flex';
+  $('edit-fallback-click').checked = selBtn.fallback_click !== false;
+  $('edit-fallback-long-row').style.display = isCommon ? 'none' : 'flex';
+  $('edit-fallback-long').checked = selBtn.fallback_long !== false;
   $('edit-long-only-row').style.display = map.long_press ? 'flex' : 'none'; // 长按未配置时隐藏
   $('edit-long-only').checked = map.long_press_layer_only === true; // 长按开关（缺省关闭）
 
@@ -513,6 +524,14 @@ const App = {
       button: selectedButton,
       click: $('edit-click-only').checked, // 点击开关状态
       longPress: $('edit-long-only').checked, // 长按开关状态
+    });
+  },
+  setFallback() { // 切换「短按/长按未映射时回落公共层」开关
+    invoke('set_layer_fallback', {
+      layerId: editLayerId,
+      button: selectedButton,
+      click: $('edit-fallback-click').checked,
+      longPress: $('edit-fallback-long').checked,
     });
   },
   // ---- 长按动作（需求2） ----

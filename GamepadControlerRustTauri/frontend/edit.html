@@ -51,6 +51,16 @@
           <span>点击：只切换层（打开后不带上切层键按住的修饰键，如按住 LB 的 Ctrl）</span>
         </label>
 
+        <label id="edit-fallback-click-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 短按回落公共层开关 -->
+          <input type="checkbox" id="edit-fallback-click" onchange="App.setFallback()"> <!-- 开关本体 -->
+          <span>短按：未映射时回落公共层（关闭后本层未映射的按键短按不再使用公共层映射）</span>
+        </label>
+
+        <label id="edit-fallback-long-row" class="dim" style="display:flex;align-items:center;gap:6px;margin:6px 0;cursor:pointer;"> <!-- 长按回落公共层开关 -->
+          <input type="checkbox" id="edit-fallback-long" onchange="App.setFallback()"> <!-- 开关本体 -->
+          <span>长按：未映射时回落公共层（关闭后本层未映射的按键长按不再使用公共层映射）</span>
+        </label>
+
         <div class="dim" id="edit-states-label">生效状态条件（不选则始终生效）</div> <!-- 状态条件标题 -->
         <div id="edit-states" class="chips-row"></div> <!-- 状态 chips：未选 / = 真 / = 假 循环切换 -->
         <div id="edit-state-logic" class="chips-row"></div> <!-- 条件组合方式：逻辑或 / 逻辑与 -->

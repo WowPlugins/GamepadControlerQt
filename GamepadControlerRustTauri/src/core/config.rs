@@ -26,6 +26,7 @@ use crate::core::input_types::*;
 use crate::core::mapping_types::*;
 // 【Rust 语法】`use ...::{a, b}` 花括号形式：同时从 serde_json 导入 `json`（宏，用于快速构造 JSON 值）和 `Value`（枚举，表示任意 JSON 值）。
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 // 【Rust 语法】`pub const`：声明公开的编译期常量；`i64 = 2` 是类型注解（64 位有符号整数）和初始值；常量的名字约定用全大写下划线分隔。
 pub const CONFIG_VERSION: i64 = 2;
@@ -656,6 +657,31 @@ fn layer_to_json(layer: &OperationLayer) -> Value {
     }
     // 写入按钮映射表（mappings 转成 Value::Object）。
     obj.insert("buttonMappings".to_string(), Value::Object(mappings));
+    // 禁止回落公共层的按钮（默认全部回落，集合为空时不写，保持旧配置简洁）。
+    if !layer.no_fallback_click_buttons.is_empty() {
+        let mut names: Vec<String> = layer
+            .no_fallback_click_buttons
+            .iter()
+            .map(|b| controller_button_name(*b).to_string())
+            .collect();
+        names.sort(); // 排序保证输出稳定
+        obj.insert(
+            "noFallbackClickButtons".to_string(),
+            Value::Array(names.into_iter().map(Value::String).collect()),
+        );
+    }
+    if !layer.no_fallback_long_buttons.is_empty() {
+        let mut names: Vec<String> = layer
+            .no_fallback_long_buttons
+            .iter()
+            .map(|b| controller_button_name(*b).to_string())
+            .collect();
+        names.sort();
+        obj.insert(
+            "noFallbackLongButtons".to_string(),
+            Value::Array(names.into_iter().map(Value::String).collect()),
+        );
+    }
     // 【Rust 语法】`Value::Object(obj)`：把 Map 包装成 Value 对象，作为函数返回值（无分号）。
     Value::Object(obj)
 }
@@ -714,6 +740,31 @@ fn parse_layer(v: &Value, is_common: bool) -> OperationLayer {
                         // 写入按钮→映射 的关系。
                         layer.button_mappings.insert(btn, mapping);
                     }
+                }
+            }
+        }
+    }
+    // 禁止回落公共层的按钮：缺省为空 = 全部允许回落（兼容旧配置）。
+    let parse_no_fallback = |key: &str, set: &mut HashSet<ControllerButton>| {
+        if let Some(Value::Array(arr)) = obj.get(key) {
+            for v in arr {
+                if let Some(name) = v.as_str() {
+                    if let Some(btn) = controller_button_from_name(name) {
+                        set.insert(btn);
+                    }
+                }
+            }
+        }
+    };
+    parse_no_fallback("noFallbackClickButtons", &mut layer.no_fallback_click_buttons);
+    parse_no_fallback("noFallbackLongButtons", &mut layer.no_fallback_long_buttons);
+    // 兼容上一版的单开关字段：同时禁止短按与长按回落
+    if let Some(Value::Array(arr)) = obj.get("noFallbackButtons") {
+        for v in arr {
+            if let Some(name) = v.as_str() {
+                if let Some(btn) = controller_button_from_name(name) {
+                    layer.no_fallback_click_buttons.insert(btn);
+                    layer.no_fallback_long_buttons.insert(btn);
                 }
             }
         }

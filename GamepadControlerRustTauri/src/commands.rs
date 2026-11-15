@@ -121,6 +121,8 @@ pub struct ButtonGridItem { // 层编辑界面按钮网格的一个格子
     long_desc: Option<String>, // 长按动作描述（None 表示未配置长按）
     click_layer_only: bool, // 点击「只切换层」开关是否打开
     long_layer_only: bool, // 长按「只切换层」开关是否打开
+    fallback_click: bool, // 本层未映射该按钮时，短按是否回落公共层
+    fallback_long: bool, // 本层未映射该按钮时，长按是否回落公共层
 } // 结构体结束
 
 // 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
@@ -1071,6 +1073,8 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
                 long_desc, // 长按动作描述
                 click_layer_only: m.map(|k| k.click_layer_only).unwrap_or(false), // 点击「只切换层」开关
                 long_layer_only: m.map(|k| k.long_press_layer_only).unwrap_or(false), // 长按「只切换层」开关
+                fallback_click: layer.allows_click_fallback(b), // 短按回落开关
+                fallback_long: layer.allows_long_fallback(b), // 长按回落开关
             } // 结构体结束
         }) // 闭包返回 ButtonGridItem
         .collect(); // 收集为 Vec<ButtonGridItem>
@@ -1371,6 +1375,29 @@ pub fn set_layer_only(
             core.profile_rev += 1; // 配置版本号自增
         } // 内层 if-let 结束
     } // 外层 if-let 结束
+} // 函数结束
+
+//
+#[tauri::command]
+pub fn set_layer_fallback(
+    state: State<'_, AppState>,
+    layer_id: String,
+    button: String,
+    click: bool,
+    long_press: bool,
+) {
+    if layer_id == "Common" {
+        return; // 公共层没有回落目标，忽略
+    }
+    let Some(b) = controller_button_from_name(&button) else {
+        return; // 按钮名无效
+    };
+    let mut core = state.shared.core.lock().unwrap(); // 加锁取可变访问
+    if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
+        layer.set_click_fallback(b, click); // 写入短按回落开关
+        layer.set_long_fallback(b, long_press); // 写入长按回落开关
+        core.profile_rev += 1; // 配置版本号自增
+    }
 } // 函数结束
 
 //

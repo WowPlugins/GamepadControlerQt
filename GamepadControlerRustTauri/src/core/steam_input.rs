@@ -17,7 +17,7 @@
 use crate::core::input_types::{ControllerButton, ControllerStick, Vector2};
 // 【Rust 语法】use 可跨行书写：多个导入名称用逗号分隔、换行排列，末尾分号结束。
 use crate::core::mapping_types::{
-    ActionType, ControllerProfile, KeyMapping, OperationLayer,
+    ActionType, ControllerProfile, KeyMapping, MappedAction, OperationLayer,
 };
 use crate::core::UiEvent; // 导入 UiEvent 类型
 use std::collections::{HashMap, HashSet}; // 【Rust 语法】嵌套花括号：从 std::collections 一次导入 HashMap 与 HashSet 两个容器
@@ -208,17 +208,48 @@ impl SteamInput {
         &self,
         button: ControllerButton,
     ) -> Option<(KeyMapping, String)> {
+        // 第一层「本层没有该按钮映射」的短按/长按回落开关（用于决定公共层映射怎么用）
+        let mut fallback_flags: Option<(bool, bool)> = None;
         for id in self.active_layers.iter().rev() { // 【Rust 语法】.rev() 反转迭代器（从最后激活的层/栈顶开始）；for 循环遍历
             if let Some(layer) = self.profile.find_layer(id) { // 【Rust 语法】if let 模式匹配：若 find_layer 返回 Some 则解包为 layer 进入分支；None 则跳过
                 if let Some(m) = layer.get_mapping(button) { // 若该层存在此按钮的映射
-                    return Some((m.clone(), id.clone())); // 同时返回映射与层 id
+                    return Some((m.clone(), id.clone())); // 同时返回映射与层 id（本层有映射时回落开关不参与）
                 } // 命中分支结束
+                // 本层没有该按钮映射：记录短按/长按的回落开关；
+                // 两者都关闭时直接阻断查找（不再向下层/公共层回落）。
+                let allow_click = layer.allows_click_fallback(button);
+                let allow_long = layer.allows_long_fallback(button);
+                if fallback_flags.is_none() {
+                    fallback_flags = Some((allow_click, allow_long));
+                }
+                if !allow_click && !allow_long {
+                    return None;
+                } // 阻断回落分支结束
             } // 层存在分支结束
         } // 循环结束
-        self.profile // 操作层栈未命中，回退到公共层
-            .common_layer() // 获取公共层（返回 Option<&OperationLayer>）
-            .and_then(|cl| cl.get_mapping(button)) // 【Rust 语法】Option::and_then(闭包)：Some 时调用闭包（闭包也返回 Option），并自动扁平化嵌套的 Option
-            .map(|m| (m.clone(), "Common".to_string())) // 公共层映射的来源层记为 Common
+        // 操作层栈未命中，回退到公共层；按第一层无映射层的开关决定短按/长按是否可用
+        let common = self
+            .profile
+            .common_layer()?
+            .get_mapping(button)?
+            .clone();
+        let (allow_click, allow_long) = fallback_flags.unwrap_or((true, true));
+        if !allow_long { // 长按不回落：去掉公共层的长按配置，短按立即执行
+            let mut m = common;
+            m.long_press = None;
+            m.long_press_subs.clear();
+            return Some((m, "Common".to_string()));
+        }
+        if !allow_click { // 短按不回落：公共层没有长按则无动作；有长按则只保留长按
+            if common.long_press.is_none() {
+                return None;
+            }
+            let mut m = common;
+            m.action = MappedAction::mouse_move(); // 空动作：短按不执行任何注入
+            m.sub_commands.clear();
+            return Some((m, "Common".to_string()));
+        }
+        Some((common, "Common".to_string())) // 短按/长按都回落：直接使用公共层映射
     } // 方法结束
 
     // -----------------------------------------------------------------

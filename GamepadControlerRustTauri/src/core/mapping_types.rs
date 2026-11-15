@@ -15,7 +15,7 @@
 // 【Rust 语法】use 导入语句：`crate::` 表示当前 crate 的根模块；`*` 为通配符，把 input_types 模块中所有公开（pub）符号引入当前作用域，方便直接使用（如 MouseButton、android_key）。
 use crate::core::input_types::*;
 // 【Rust 语法】use 导入语句：从标准库 std::collections 模块导入 HashMap（哈希映射/字典容器）。
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // 【Rust 语法】const 定义编译期常量：值在编译期确定、不可被修改；`pub` 表示对外公开；类型 `usize` 为无符号整数（位数随平台 32/64 位而变化）。
 /// 单个操作集内最多操作层数
@@ -448,6 +448,12 @@ pub struct OperationLayer {
     pub trigger_button: ControllerButton, // 触发按键（手柄按钮）
     /// 按钮 -> 映射
     pub button_mappings: HashMap<ControllerButton, KeyMapping>, // 【Rust 语法】HashMap<K,V> 哈希表：键为手柄按钮，值为对应的按键映射
+    /// 禁止「短按」回落公共层的按钮集合（仅非公共层有效）：
+    /// 按钮在本层没有映射时，短按默认继续向下层/公共层查找；加入本集合后短按阻断查找。
+    pub no_fallback_click_buttons: HashSet<ControllerButton>, // 【Rust 语法】HashSet<T>：不重复元素集合
+    /// 禁止「长按」回落公共层的按钮集合（仅非公共层有效）：
+    /// 本层该按钮没有映射时，长按是否继续使用公共层映射的长按动作。
+    pub no_fallback_long_buttons: HashSet<ControllerButton>,
 } // 结束 OperationLayer 结构体定义
 
 // 【Rust 语法】impl 块：为 OperationLayer 实现方法。
@@ -461,6 +467,8 @@ impl OperationLayer {
             has_trigger_button: false, // 默认没有触发按键
             trigger_button: ControllerButton::A, // 触发按键给默认值 A
             button_mappings: HashMap::new(), // 初始为空映射表
+            no_fallback_click_buttons: HashSet::new(), // 默认短按允许回落公共层
+            no_fallback_long_buttons: HashSet::new(), // 默认长按允许回落公共层
         } // 结束 Self 结构体字面量
     } // 结束 new 函数
 
@@ -468,6 +476,34 @@ impl OperationLayer {
     pub fn get_mapping(&self, b: ControllerButton) -> Option<&KeyMapping> {
         self.button_mappings.get(&b) // 【Rust 语法】HashMap::get 按键查询，返回 Option<&V>；此处作为最后一个表达式直接返回
     } // 结束 get_mapping 函数
+
+    /// 本层未映射该按钮时，短按是否允许继续回落到公共层（默认允许）。
+    pub fn allows_click_fallback(&self, b: ControllerButton) -> bool {
+        !self.no_fallback_click_buttons.contains(&b)
+    } // 结束 allows_click_fallback 函数
+
+    /// 本层未映射该按钮时，长按是否允许继续回落到公共层（默认允许）。
+    pub fn allows_long_fallback(&self, b: ControllerButton) -> bool {
+        !self.no_fallback_long_buttons.contains(&b)
+    } // 结束 allows_long_fallback 函数
+
+    /// 设置短按是否允许回落公共层。
+    pub fn set_click_fallback(&mut self, b: ControllerButton, allow: bool) {
+        if allow {
+            self.no_fallback_click_buttons.remove(&b);
+        } else {
+            self.no_fallback_click_buttons.insert(b);
+        }
+    } // 结束 set_click_fallback 函数
+
+    /// 设置长按是否允许回落公共层。
+    pub fn set_long_fallback(&mut self, b: ControllerButton, allow: bool) {
+        if allow {
+            self.no_fallback_long_buttons.remove(&b);
+        } else {
+            self.no_fallback_long_buttons.insert(b);
+        }
+    } // 结束 set_long_fallback 函数
 } // 结束 impl OperationLayer 块
 
 // ---------------------------------------------------------------------
