@@ -1054,3 +1054,80 @@ html.overlay-html {
   transition: opacity 0.2s ease, transform 0.2s ease; /* 展开/收起淡入淡出 + 滑入滑出（快速不拖沓） */
 }
 #ov-map-list { display: flex; flex-direction: column; gap: 2px; } /* 映射列表：垂直排列（高度随内容自适应，窗口高度由 overlay.js 贴合，无滚动） */
+
+/* ---- 层行：层按钮 + 删除按钮 ---- */
+.layer-item { display: flex; align-items: center; gap: 6px; } /* 行容器：水平排列 */
+.layer-item .layer-btn { flex: 1; min-width: 0; } /* 层按钮占满剩余宽度 */
+.layer-del {
+  flex-shrink: 0; /* 不随窗口压缩 */
+  width: 26px; /* 固定宽度 */
+  height: 26px; /* 固定高度 */
+  padding: 0; /* 清除内边距 */
+  background: linear-gradient(180deg, #383c43, #33363b); /* 与层按钮同款深灰底 */
+  border: 1px solid #3f434a; /* 描边 */
+  border-radius: 8px; /* 圆角 */
+  color: #8a8f99; /* 默认弱化文字色 */
+  font-size: 16px; /* 叉号字号 */
+  line-height: 1; /* 单行高度 */
+  cursor: pointer; /* 手型光标 */
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease; /* 悬停过渡 */
+}
+.layer-del:hover {
+  background: linear-gradient(180deg, #f0645f, #e5554f); /* 悬停变红，提示危险操作 */
+  border-color: #e5554f; /* 红色描边 */
+  color: #fff; /* 白色叉号 */
+  box-shadow: 0 4px 12px rgba(229, 85, 79, 0.4); /* 红色光晕 */
+}
+.layer-del:active { transform: scale(0.94); } /* 按下微缩 */
+
+/* ---- 双键组合激活配置行（编辑页顶部） ---- */
+.combo-row {
+  display: flex; /* 弹性布局 */
+  align-items: center; /* 垂直居中 */
+  flex-wrap: wrap; /* 允许换行 */
+  gap: 8px; /* 控件间距 */
+  padding: 2px 14px 8px; /* 内边距（与头部对齐） */
+  flex-shrink: 0; /* 不随窗口压缩 */
+}
+.combo-row .select {
+  font-size: 13px; /* 与整体字号一致 */
+  padding: 5px 8px; /* 收紧内边距 */
+}
+
+/* ---- 删除二次确认弹窗 ---- */
+.confirm-mask {
+  position: fixed; /* 固定定位铺满窗口 */
+  inset: 0; /* 四边贴齐 */
+  display: flex; /* 弹性布局（居中） */
+  align-items: center; /* 垂直居中 */
+  justify-content: center; /* 水平居中 */
+  background: rgba(10, 11, 13, 0.62); /* 半透明深色遮罩 */
+  backdrop-filter: blur(2px); /* 背景模糊，突出弹窗 */
+  z-index: 1000; /* 置于最上层 */
+}
+.confirm-box {
+  width: 400px; /* 弹窗宽度 */
+  max-width: 88vw; /* 窄窗口自适应 */
+  background: linear-gradient(180deg, #2f333a, #26282c); /* 与卡片一致的深色渐变 */
+  border: 1px solid #e5554f; /* 红色描边强调危险操作 */
+  border-radius: 12px; /* 圆角 */
+  padding: 18px 20px; /* 内边距 */
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(229, 85, 79, 0.18); /* 投影 + 红色光边 */
+}
+.confirm-title {
+  font-size: 16px; /* 标题字号 */
+  font-weight: 600; /* 加粗 */
+  color: #ff8a85; /* 红色标题 */
+  margin-bottom: 10px; /* 与正文间距 */
+}
+.confirm-text {
+  font-size: 13px; /* 正文字号 */
+  color: #e8eaee; /* 主文字色 */
+  line-height: 1.65; /* 行高 */
+  margin-bottom: 14px; /* 与按钮行间距 */
+}
+.confirm-warn {
+  margin-top: 8px; /* 与上一行间距 */
+  color: #f0a34a; /* 橙色警示文字 */
+  font-size: 12px; /* 小字 */
+}

@@ -92,8 +92,9 @@ const STATE_OPTIONS = [
   ['isFalling', '下落中'], ['isSwimming', '游泳中'],
 ];
 
-// LONG_PRESS_KINDS：可作为「长按动作」的类型（切层由映射引擎处理、状态宏不可作长按；「未设置」用于取消长按）
-const LONG_PRESS_KINDS = KINDS.filter(([k]) => k === 'none' || (k !== 'switchlayer' && k !== 'switchlayerandkey' && k !== 'statemacro'));
+// LONG_PRESS_KINDS：可作为「长按动作」的类型（纯切层由映射引擎按下即处理、状态宏不可作长按；
+// 「切层+按键」可用于长按——超阈值后才切层并按下组合键；「未设置」用于取消长按）
+const LONG_PRESS_KINDS = KINDS.filter(([k]) => k === 'none' || (k !== 'switchlayer' && k !== 'statemacro'));
 
 // MOUSE_BUTTONS：可映射的鼠标按键列表，[枚举名, 中文显示名]
 const MOUSE_BUTTONS = [
@@ -303,6 +304,30 @@ function renderEdit(info, map) {
   renderStateConditions(map); // 渲染短按状态条件配置区
   renderLongStateConditions(map); // 渲染长按状态条件配置区
   renderLongPress(info, map); // 渲染长按动作配置区（需求2）
+  renderComboSwitch(info); // 渲染双键组合激活配置区
+}
+
+// renderComboSwitch：渲染「双键组合激活」行（同时按下两个手柄键切到本层，可选同时按组合键）
+let prevComboKey = null; // 上一次下拉框内容指纹，避免轮询刷新重置展开中的下拉框
+function renderComboSwitch(info) {
+  const isCommon = editLayerId === 'Common'; // 公共层恒激活，无需组合激活
+  $('combo-layer-row').style.display = isCommon ? 'none' : 'flex';
+  if (isCommon) { prevComboKey = null; return; } // 清空指纹，切回操作层时强制重建
+  const cs = info.combo_switch || null; // 已配置的组合（null = 未配置）
+  const fp = (info.buttons || []).map((b) => b.name).join(',') + '|' +
+    (cs ? cs.button_a + ',' + cs.button_b + ',' + cs.key_code : '');
+  if (fp === prevComboKey) return; // 内容未变化则保留用户当前选择
+  prevComboKey = fp;
+  const opts = (cur) => '<option value="">未设置</option>' + (info.buttons || []).map((b) =>
+    '<option value="' + b.name + '"' + (b.name === cur ? ' selected' : '') + '>' + esc(b.display) + '</option>'
+  ).join('');
+  $('combo-btn-a').innerHTML = opts(cs ? cs.button_a : ''); // 组合键 1
+  $('combo-btn-b').innerHTML = opts(cs ? cs.button_b : ''); // 组合键 2
+  const curKey = cs ? String(cs.key_code || 0) : '0'; // 当前按键（0 = 只切层）
+  $('combo-key-select').innerHTML = '<option value="0"' + (curKey === '0' ? ' selected' : '') + '>不按键（只切层）</option>' +
+    COMMON_KEYS.map(([code, label]) =>
+      '<option value="' + code + '"' + (String(code) === curKey ? ' selected' : '') + '>' + label + '</option>'
+    ).join('');
 }
 
 // renderStateConditions：渲染短按「生效状态条件」区
@@ -378,8 +403,8 @@ function renderLongPress(info, map) {
     ? targetHTML(info, editLongKind, lp || {}, true) // 复用目标选择区，长按样式
     : '<div class="faint">选择长按动作类型后配置目标；未选择则无长按</div>';
 
-  // 长按子命令（仅键盘/滚轮且已配置长按时显示）
-  const showLongSubs = lp && (editLongKind === 'keyboard' || editLongKind === 'wheelup' || editLongKind === 'wheeldown');
+  // 长按子命令（键盘/滚轮/切层+按键且已配置长按时显示）
+  const showLongSubs = lp && (editLongKind === 'keyboard' || editLongKind === 'wheelup' || editLongKind === 'wheeldown' || editLongKind === 'switchlayerandkey');
   $('edit-long-subs-label').style.display = showLongSubs ? '' : 'none';
   $('edit-long-subs').style.display = showLongSubs ? '' : 'none';
   if (showLongSubs) {
@@ -443,12 +468,12 @@ function targetHTML(info, kind, act, isLong) {
     return '<div class="dim">选择目标层</div><div class="chips-row">' +
       info.switch_targets.map((t) => // 遍历可切换的目标层生成 chip
         '<div class="chip' + (t.name.toLowerCase() === curLayer.toLowerCase() ? ' active' : '') + '" ' + // 当前目标层加 active 高亮
-        'onclick="App.setCombo(' + q(t.name) + ',' + curKey + ')">' + esc(t.display) + '</div>' // 保留已选按键
+        'onclick="App.set' + preset + 'Combo(' + q(t.name) + ',' + curKey + ')">' + esc(t.display) + '</div>' // 短按/长按分别提交
       ).join('') + '</div>' +
       '<div class="dim">选择按键（按住时切层并按下，松开时一并释放）</div><div class="chips-row">' +
       COMMON_KEYS.map(([code, label]) => // 遍历按键生成 chip
         '<div class="chip ' + (code === curKey ? 'active' : '') + '" ' + // 当前按键加 active 高亮
-        'onclick="App.setCombo(' + q(curLayer) + ',' + code + ')">' + label + '</div>' // 保留已选目标层
+        'onclick="App.set' + preset + 'Combo(' + q(curLayer) + ',' + code + ')">' + label + '</div>' // 保留已选目标层
       ).join('') + '</div>';
   }
   if (kind === 'turnaround') { // 快速转身 → 选择方向与幅度（按下即执行一次）
@@ -582,6 +607,11 @@ const App = {
       if (t) { // 有目标层才写入
         invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: null, mouseButton: null, layerName: t.name });
       }
+    } else if (k === 'switchlayerandkey') { // 切层+按键：先落到第一个目标层（键可后选）
+      const t = currentTargets[0];
+      if (t) {
+        invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: currentLongKeyCode || null, mouseButton: null, layerName: t.name });
+      }
     } else if (k === 'turnaround') { // 快速转身：先落默认幅度（向右 180°）
       invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: k, keyCode: 800, mouseButton: null, layerName: null });
     }
@@ -595,6 +625,10 @@ const App = {
   },
   setLongLayer(name) { // 设置长按切层动作
     invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'switchlayer', layerName: name, keyCode: null, mouseButton: null });
+  },
+  setLongCombo(layer, code) { // 设置长按「切层+按键」：长按超阈值后切层并按下该键
+    invoke('set_long_press', { layerId: editLayerId, button: selectedButton, kind: 'switchlayerandkey', layerName: layer || null, keyCode: code || null, mouseButton: null });
+    prevEdit = null; // 强制重新渲染
   },
   toggleLongSub(code) { // 切换长按子命令
     invoke('toggle_long_press_sub', { layerId: editLayerId, button: selectedButton, keyCode: code });
@@ -636,6 +670,27 @@ const App = {
     invoke('change_layer_trigger_button', { layerId: layerId, buttonName: keyName })
       .catch((e) => console.error('change_layer_trigger_button:', e)); // 打印失败原因，避免再次静默无反应
   },
+  applyComboSwitch() { // 应用双键组合激活配置
+    const a = $('combo-btn-a').value; // 组合键 1
+    const b = $('combo-btn-b').value; // 组合键 2
+    if (!a || !b) { // 两个键都要选
+      flashTip('请先选择两个手柄按键'); // 提示用户
+      return;
+    }
+    if (a === b) { // 同一个键无法组成组合
+      flashTip('两个按键不能相同');
+      return;
+    }
+    const code = parseInt($('combo-key-select').value || '0', 10) || 0; // 0 = 只切层
+    invoke('set_combo_switch', { layerId: editLayerId, buttonA: a, buttonB: b, keyCode: code });
+    prevComboKey = null; // 强制下一轮重建下拉框
+    prevEdit = null;
+  },
+  clearComboSwitch() { // 清除双键组合激活配置
+    invoke('set_combo_switch', { layerId: editLayerId, buttonA: null, buttonB: null, keyCode: null });
+    prevComboKey = null; // 强制下一轮重建下拉框
+    prevEdit = null;
+  },
 };
 
 // renderRenameLayerRow：根据 renameLayerMode 决定重命名输入行的显示与内容
@@ -665,6 +720,8 @@ $('edit-close').addEventListener('click', () => App.close()); // 关闭按钮
 $('edit-clear').addEventListener('click', () => App.clearMapping()); // 清除映射按钮
 $('edit-long-clear').addEventListener('click', () => App.clearLongPress()); // 取消长按动作按钮
 $('edit-layer-select').addEventListener('change', (e) => App.layerActiveButton(editLayerId, e.target.value));
+$('combo-apply').addEventListener('click', () => App.applyComboSwitch()); // 应用双键组合激活
+$('combo-clear').addEventListener('click', () => App.clearComboSwitch()); // 清除双键组合激活
 
 document.addEventListener('pointerdown', (e) => { // 监听指针按下（事件委托，适用于动态生成的元素）
   const el = e.target.closest('.btn, .chip, .pad-btn, .mini'); // 命中可点击元素
@@ -690,6 +747,18 @@ let tipTarget = null; // 当前正在显示提示的元素
 function hideTip() { // 隐藏提示气泡
   if (tipEl.style.display !== 'none') tipEl.style.display = 'none';
   tipTarget = null;
+}
+
+// flashTip：在窗口顶部居中短暂显示一条提示（用于表单校验，风格与悬浮提示一致）
+function flashTip(msg) {
+  tipTarget = null; // 不绑定具体元素，避免被 mouseover 逻辑误清
+  tipEl.textContent = msg;
+  tipEl.style.display = 'block'; // 先显示才能测宽度
+  const t = tipEl.getBoundingClientRect();
+  tipEl.style.left = Math.max(8, (window.innerWidth - t.width) / 2) + 'px';
+  tipEl.style.top = '16px';
+  clearTimeout(flashTip._t);
+  flashTip._t = setTimeout(() => { if (!tipTarget) hideTip(); }, 2000);
 }
 
 function showTip(el) { // 显示提示：优先在元素上方，空间不足时显示在下方

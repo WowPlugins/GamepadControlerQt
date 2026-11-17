@@ -25,6 +25,18 @@
       <button class="btn" id="rename-layer-cancel">取消</button> <!-- 取消按钮 -->
     </div>
 
+    <!-- 双键组合激活：同时按下两个手柄按键激活本层（可选同时按下组合键） -->
+    <div id="combo-layer-row" class="combo-row" style="display:none">
+      <span class="dim">双键组合激活</span>
+      <select id="combo-btn-a" class="select" aria-label="组合按键一"></select>
+      <span class="dim">+</span>
+      <select id="combo-btn-b" class="select" aria-label="组合按键二"></select>
+      <span class="dim">同时按下时</span>
+      <select id="combo-key-select" class="select" aria-label="切层时按下的键"></select>
+      <button class="btn" id="combo-apply">应用</button>
+      <button class="btn" id="combo-clear">清除组合</button>
+    </div>
+
     <div class="edit-body"> <!-- 编辑区两栏布局 -->
       <!-- 左栏：手柄按键网格 -->
       <div class="edit-grid" id="edit-grid"></div> <!-- 手柄按键按钮网格（edit.js 动态渲染，点击选中按键） -->

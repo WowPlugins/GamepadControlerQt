@@ -21,7 +21,7 @@
 // 【Rust 语法】use 导入语句：导入本 crate 内 core 模块下的 InputInjector（注入器接口，封装 Windows SendInput）。
 use crate::core::injector::InputInjector;
 // 【Rust 语法】use 花括号导入：从同一模块按需导入多个符号（android_key 键码常量、手柄按钮/摇杆/鼠标键枚举）。
-use crate::core::input_types::{android_key, ControllerStick, MouseButton, TriggerId};
+use crate::core::input_types::{android_key, ControllerButton, ControllerStick, MouseButton, TriggerId};
 // 【Rust 语法】use 花括号导入：导入映射引擎的动作类型枚举 ActionType 与按键映射结构体 KeyMapping。
 use crate::core::mapping_types::{ActionType, KeyMapping, MappedAction};
 // 【Rust 语法】use 导入语句：导入 UI 事件类型 UiEvent（用于向 UI 线程发通知）。
@@ -536,14 +536,21 @@ impl MapperState {
         self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, click_layer_only, mapping.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe);
     } // 结束 handle_button 函数
 
-    /// 长按检查（由轮询线程每个 Tick 调用）：满足阈值的按钮切换为长按动作
+    /// 清理某触发源的长按判定状态（长按触发切层后松开、组合切层结束时调用，避免下次按下沿用旧状态）
+    pub fn clear_long_state(&mut self, button: TriggerId) {
+        self.pending_long_press.remove(&button);
+        self.long_press_buttons.remove(&button);
+    }
+
+    /// 长按检查（由轮询线程每个 Tick 调用）：满足阈值的按钮切换为长按动作。    /// 返回本次需要激活的层（长按动作为「切层+按键」时），由 AppCore 交给映射引擎激活。
     pub fn check_long_press(
         &mut self,
         injector: &InputInjector,
         event_tx: &Sender<UiEvent>,
         look: &LookState,
         wow_exe: &str, // 目标游戏 exe（长按动作为状态宏时居中用）
-    ) {
+    ) -> Vec<(ControllerButton, String)> {
+        let mut layer_switches: Vec<(ControllerButton, String)> = Vec::new(); // 待激活层列表
         // 到点的延迟按回：把掩蔽抬起的层保持修饰键按回（保证掩蔽窗口跨过 WoW 一帧）
         self.flush_mask_restore(injector);
         // 到点的 WASD 自动锁定恢复（鼠标左右键松开后延迟执行，避开本次点击的落点判定）
@@ -554,7 +561,7 @@ impl MapperState {
             }
         }
         if self.pending_long_press.is_empty() { // 无待判定项时直接返回
-            return;
+            return layer_switches;
         }
         let now = Instant::now(); // 当前时刻
         // 收集已满足阈值的按钮（先收集再处理，避免遍历时修改容器）
@@ -569,9 +576,16 @@ impl MapperState {
                 self.release_button_injection(button, injector); // 先释放按下时已注入的状态（配置长按后短按未注入，通常无内容）
                 self.long_press_buttons.insert(button); // 标记为长按已触发
                 let layer = p.layer_id.clone(); // 先克隆层 id，避免与 &mut self 借用冲突
+                // 长按动作是「切层+按键」：层激活由映射引擎负责，先记录下来
+                if p.action.r#type == ActionType::SwitchLayerAndKey {
+                    if let (TriggerId::Pad(pad_button), Some(target)) = (button, p.action.layer_name.as_ref()) {
+                        layer_switches.push((pad_button, target.clone()));
+                    }
+                }
                 self.execute_press(button, &p.action, &p.subs, &layer, p.layer_only, p.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe); // 执行长按动作
             } // 结束 if let 分支
         } // 结束 for 循环
+        layer_switches
     } // 结束 check_long_press 函数
 
     /// 执行一次按下动作（短按与长按共用）

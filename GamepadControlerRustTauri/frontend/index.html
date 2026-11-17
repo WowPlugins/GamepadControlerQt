@@ -35,6 +35,9 @@
           <button class="btn" id="btn-delete">删除</button> <!-- 删除操作集 -->
         </div>
         <div id="layer-list" class="layer-list"></div> <!-- 层列表（公共层 + 操作层，main.js 动态渲染，点击打开编辑窗口） -->
+        <div class="btn-row"> <!-- 操作层管理按钮行 -->
+          <button class="btn" id="btn-add-layer">添加层</button> <!-- 新增一个操作层 -->
+        </div>
       </div>
 
       <!-- 右栏：信息 + 设置 + 操作 -->
@@ -88,6 +91,18 @@
           <button class="btn" id="btn-keymacro">键盘映射</button> <!-- 打开独立「物理键盘映射」窗口 -->
           <button class="btn" id="btn-quit">退出</button> <!-- 退出程序 -->
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 层删除二次确认（醒目红色危险操作） -->
+  <div id="confirm-mask" class="confirm-mask" style="display:none">
+    <div class="confirm-box">
+      <div class="confirm-title">删除操作层</div>
+      <div class="confirm-text" id="confirm-text"></div>
+      <div class="btn-row">
+        <button class="btn" id="confirm-cancel">取消</button>
+        <button class="btn danger" id="confirm-ok">确认删除</button>
       </div>
     </div>
   </div>

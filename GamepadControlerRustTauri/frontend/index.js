@@ -54,6 +54,7 @@ let stateReadEnabled = false;  // 是否启用角色状态读取（来自后端�
 let stateReadInterval = 50;    // 状态读取周期（毫秒）
 let stateBits = 0;             // 当前 10 个状态位图（bit0..bit9）
 let debugLogEnabled = false;   // 调试日志开关（来自后端设置）
+let pendingDeleteLayer = null; // 待确认删除的层 id（二次确认弹窗用）
 
 let prevMain = null;           // 上一次渲染的快照 JSON 串，用于对比避免重复渲染
 
@@ -106,8 +107,12 @@ function renderMain(snap) {
   // 层列表（点击打开独立「编辑层」窗口）
   const layers = [{ id: 'Common', name: '公共层', active: false }].concat(snap.layers); // 公共层固定排最前，再接操作层
   $('layer-list').innerHTML = layers.map((l) => // 遍历所有层生成按钮
+    '<div class="layer-item">' + // 行容器（层按钮 + 删除按钮）
     '<div class="layer-btn' + (l.active ? ' active' : '') + '" ' + // 当前层加 active 高亮
-    'onclick="App.openEdit(' + q(l.id) + ')">' + esc(l.name) + '</div>' // 点击打开对应层的编辑窗口
+    'onclick="App.openEdit(' + q(l.id) + ')">' + esc(l.name) + '</div>' + // 点击打开对应层的编辑窗口
+    (l.id === 'Common' ? '' : // 公共层不可删除
+      '<button class="layer-del" title="删除该层" onclick="event.stopPropagation();App.askDeleteLayer(' + q(l.id) + ',' + q(l.name) + ')">×</button>') +
+    '</div>'
   ).join('');
 
   // 当前信息
@@ -427,6 +432,39 @@ const App = {
   openEdit(id) { openEditWindow(id); }, // 打开指定层的编辑窗口
   openHelp() { openHelpWindow(); }, // 打开使用说明窗口
   openKeymacro() { openKeymacroWindow(); }, // 打开物理键盘映射窗口
+
+  // ---- 操作层增删 ----
+  addLayer() { // 新增操作层并打开其编辑窗口
+    invoke('add_layer')
+      .then((id) => {
+        prevMain = null; // 强制刷新层列表
+        if (id) openEditWindow(id); // 新层创建成功则直接打开编辑
+      })
+      .catch((e) => console.error('add_layer:', e));
+  },
+  askDeleteLayer(id, name) { // 弹出删除层的二次确认（醒目红色）
+    pendingDeleteLayer = id; // 记录待删除层
+    $('confirm-text').innerHTML =
+      '确定删除操作层 <b>' + esc(name) + '</b> 吗？' +
+      '<div class="confirm-warn">该层的全部按键映射将被永久删除，指向该层的切层映射与双键组合配置也会一并清除，此操作无法撤销。</div>';
+    $('confirm-mask').style.display = 'flex'; // 显示确认遮罩
+  },
+  cancelDeleteLayer() { // 取消删除
+    pendingDeleteLayer = null;
+    $('confirm-mask').style.display = 'none';
+  },
+  commitDeleteLayer() { // 确认删除
+    const id = pendingDeleteLayer;
+    pendingDeleteLayer = null;
+    $('confirm-mask').style.display = 'none';
+    if (!id) return;
+    invoke('delete_layer', { layerId: id })
+      .then(() => {
+        prevMain = null; // 强制刷新层列表
+        emit('edit-layer', { layerId: 'Common' }); // 编辑窗口若开着被删的层，切回公共层避免误编辑
+      })
+      .catch((e) => console.error('delete_layer:', e));
+  },
 };
 
 // ---------------------------------------------------------------------
@@ -436,6 +474,9 @@ $('btn-add').addEventListener('click', () => App.addSet()); // 添加操作集
 $('btn-copy').addEventListener('click', () => App.startCopy()); // 复制操作集
 $('btn-rename').addEventListener('click', () => App.startRename()); // 重命名操作集
 $('btn-delete').addEventListener('click', () => App.deleteSet()); // 删除操作集
+$('btn-add-layer').addEventListener('click', () => App.addLayer()); // 添加操作层
+$('confirm-cancel').addEventListener('click', () => App.cancelDeleteLayer()); // 取消删除层
+$('confirm-ok').addEventListener('click', () => App.commitDeleteLayer()); // 确认删除层
 $('btn-toggle').addEventListener('click', () => App.toggleMapping()); // 开始/停止映射
 $('btn-save').addEventListener('click', () => App.saveConfig()); // 保存配置
 $('btn-reset').addEventListener('click', () => App.resetConfig()); // 重置默认配置

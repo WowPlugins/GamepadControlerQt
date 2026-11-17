@@ -8,7 +8,7 @@
 // 【Rust 语法】use 导入：crate:: 表示从本 crate 根开始定位；::* 通配导入模块全部公开项；花括号内为多个具名项
 use crate::core::config_manager; // 导入配置管理模块（保存 / 加载 / 重置）
 use crate::core::input_types::*; // 通配导入手柄输入类型：按钮枚举与显示名转换函数
-use crate::core::mapping_types::{ActionType, KeyMapping, KeyboardRule, MappedAction, StateCond, StateLogic}; // 导入映射动作类型、按键映射、键盘规则结构体、状态条件
+use crate::core::mapping_types::{ActionType, ComboSwitch, KeyMapping, KeyboardRule, MappedAction, StateCond, StateLogic}; // 导入映射动作类型、组合切层、按键映射、键盘规则结构体、状态条件
 use crate::AppState; // 导入主程序定义的全局共享状态结构体
 use serde::{Deserialize, Serialize}; // serde 序列化框架：派生 trait 的基础（JSON 与结构体互转）
 use std::sync::atomic::Ordering; // 原子操作的内存序（用于原子标志的读写）
@@ -127,9 +127,18 @@ pub struct ButtonGridItem { // 层编辑界面按钮网格的一个格子
 
 // 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
 #[derive(Serialize)]
+pub struct ComboSwitchView { // 双键组合切层配置视图
+    button_a: String, // 组合键 1（枚举名）
+    button_b: String, // 组合键 2
+    key_code: i32, // 切层同时按下的主键（0 = 只切层）
+} // 结构体结束
+
+// 【Rust 语法】derive 派生宏：自动实现 Serialize（序列化）trait
+#[derive(Serialize)]
 pub struct LayerEditSnapshot<'r> { // 层编辑页整体快照
     layer_name: String, // 被编辑层的名称
     trigger_button: Option<&'r str>, // 触发层切换的按钮（公共层无指向本层的切换映射时为 ""）
+    combo_switch: Option<ComboSwitchView>, // 双键组合激活配置（未配置为 None）
     switch_targets: Vec<SwitchTarget>, // 可切换目标列表
     buttons: Vec<ButtonGridItem>, // 按钮网格数据
 } // 结构体结束
@@ -1046,7 +1055,21 @@ pub fn quit_app(app: AppHandle) { // 退出应用命令
 pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> LayerEditSnapshot<'_> { // 层编辑快照命令
     let core = state.shared.core.lock().unwrap(); // 对核心加锁
 
-    let layer = find_layer_ref(&core.steam.profile, &layer_id).unwrap(); // 查找层引用
+    // 层可能已被删除（编辑窗口仍开着）：回退到公共层，避免命令 panic
+    let layer = match find_layer_ref(&core.steam.profile, &layer_id)
+        .or_else(|| core.steam.profile.common_layer())
+    {
+        Some(l) => l,
+        None => {
+            return LayerEditSnapshot {
+                layer_name: "Common".to_string(),
+                trigger_button: None,
+                combo_switch: None,
+                switch_targets: Vec::new(),
+                buttons: Vec::new(),
+            }
+        }
+    };
     // “激活按钮”= 公共层中按下可切到本层的按键。匹配条件与运行时解析一致
     // （steam_input.rs 先按 id 再按 name 解析 layerName），故命中层 id 或 name 均算
     let trigger_button = find_layer_ref(&core.steam.profile, "Common")
@@ -1073,6 +1096,21 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
         }) // 闭包返回 SwitchTarget
         .collect(); // 收集为 Vec<SwitchTarget>
     let held = core.steam.held_buttons(); // 当前按住的按钮集合
+    // 双键组合激活配置：按目标层 id / 名称查找（旧配置可能存的是层名）
+    let combo_switch = core
+        .steam
+        .profile
+        .active_set()
+        .and_then(|s| {
+            s.combo_switches
+                .iter()
+                .find(|c| c.target_layer == layer.id || c.target_layer == layer.name)
+        })
+        .map(|c| ComboSwitchView {
+            button_a: controller_button_name(c.button_a).to_string(),
+            button_b: controller_button_name(c.button_b).to_string(),
+            key_code: c.key_code,
+        });
     let buttons: Vec<ButtonGridItem> = all_controller_buttons() // 收集按钮网格数据
         .into_iter() // 【Rust 语法】into_iter()：消费所有权生成迭代器
         .map(|b| { // 逐个按钮转换
@@ -1103,6 +1141,7 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
     LayerEditSnapshot { // 构造层编辑快照
         layer_name: layer.name.clone(), // 层名称
         trigger_button: if let Some(b) = trigger_button { Some(controller_button_name(b)) } else { None }, // 触发按键（公共层无切到本层的映射时为 None）
+        combo_switch, // 双键组合激活配置
         switch_targets, // 切换目标列表
         buttons, // 按钮网格数据
     } // LayerEditSnapshot 字面量结束
@@ -1460,6 +1499,53 @@ pub fn rename_layer(state: State<'_, AppState>, layer_id: String, layer_name: St
     let mut core = state.shared.core.lock().unwrap();
     let layer = find_layer_mut(&mut core.steam.profile, &layer_id).unwrap();
     layer.name = layer_name;
+    core.profile_rev += 1;
+}
+
+/// 新增操作层：返回新层 id（失败返回空串）
+#[tauri::command]
+pub fn add_layer(state: State<'_, AppState>) -> String {
+    let mut core = state.shared.core.lock().unwrap();
+    core.add_layer()
+}
+
+/// 删除操作层：同时清理指向该层的切层映射与双键组合配置
+#[tauri::command]
+pub fn delete_layer(state: State<'_, AppState>, layer_id: String) -> bool {
+    let mut core = state.shared.core.lock().unwrap();
+    core.delete_layer(&layer_id)
+}
+
+/// 配置双键组合激活：button_a / button_b 为空时清除该层的组合配置；
+/// key_code 为 0 表示只切层，非 0 表示切层同时按下该键
+#[tauri::command]
+pub fn set_combo_switch(
+    state: State<'_, AppState>,
+    layer_id: String,
+    button_a: Option<String>,
+    button_b: Option<String>,
+    key_code: Option<i32>,
+) {
+    if layer_id.is_empty() || layer_id == "Common" {
+        return; // 公共层恒激活，无需组合激活
+    }
+    let a = button_a.as_deref().and_then(controller_button_from_name);
+    let b = button_b.as_deref().and_then(controller_button_from_name);
+    let mut core = state.shared.core.lock().unwrap();
+    let Some(set) = core.steam.profile.active_set_mut() else {
+        return;
+    };
+    set.combo_switches.retain(|c| c.target_layer != layer_id); // 先清除该层旧配置
+    if let (Some(a), Some(b)) = (a, b) {
+        if a != b {
+            set.combo_switches.push(ComboSwitch {
+                button_a: a,
+                button_b: b,
+                target_layer: layer_id,
+                key_code: key_code.unwrap_or(0),
+            });
+        }
+    }
     core.profile_rev += 1;
 }
 

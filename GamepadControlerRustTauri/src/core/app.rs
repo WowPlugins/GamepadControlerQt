@@ -17,7 +17,10 @@ use crate::core::injector::InputInjector;
 // 【Rust 语法】`use ...::{A, B}`：同时导入 mapper 模块下的 LookState 和 MapperState 两个类型。
 use crate::core::mapper::{LookState, MapperState};
 // 【Rust 语法】一次导入三个类型：ControllerProfile（配置）、GlobalSettings（全局设置）、OperationSet（操作集）。
-use crate::core::mapping_types::{ControllerProfile, GlobalSettings, MappedAction, OperationSet};
+use crate::core::mapping_types::{
+    ActionType, ControllerProfile, GlobalSettings, KeyMapping, MappedAction, OperationLayer,
+    OperationSet,
+};
 // 【Rust 语法】导入 steam_input 模块下的 ButtonDispatch（按钮分发枚举）和 SteamInput（映射引擎）。
 use crate::core::steam_input::{ButtonDispatch, SteamInput};
 // 【Rust 语法】导入 UiEvent（UI 事件枚举，用于向前端发送事件）。
@@ -177,7 +180,23 @@ impl AppCore {
                             TriggerId::Pad(button),
                             self.injector.as_ref(),
                         );
+                        // 长按触发的切层：清掉长按判定记录，避免下次按下沿用旧状态
+                        self.mapper.clear_long_state(TriggerId::Pad(button));
                         // 层切换时退出精细/快速移动，避免灵敏度残留
+                        self.look.set_fine_look(false);
+                        self.look.set_fast_look(false);
+                    }
+                    // 双键组合切层结束：松开任一键，释放组合键注入（注入记录在后按下的按钮上）
+                    ButtonDispatch::DeactivateCombo { layer_id, trigger } => {
+                        self.mapper.release_layer_mouse(
+                            &layer_id,
+                            self.injector.as_ref(),
+                            &self.event_tx,
+                        );
+                        self.mapper.release_button_injection(
+                            TriggerId::Pad(trigger),
+                            self.injector.as_ref(),
+                        );
                         self.look.set_fine_look(false);
                         self.look.set_fast_look(false);
                     }
@@ -234,12 +253,16 @@ impl AppCore {
                     self.last_foreground = fg;
                 }
                 let wow_exe = self.steam.profile.global_settings.wow_exe.clone(); // 目标游戏 exe（长按动作为状态宏时居中用）
-                self.mapper.check_long_press(
+                let layer_switches = self.mapper.check_long_press(
                     self.injector.as_ref(),
                     &self.event_tx,
                     self.look.as_ref(),
                     &wow_exe,
                 );
+                // 长按动作是「切层+按键」：按键已注入，这里激活目标层（松开按钮时停用）
+                for (button, target) in layer_switches {
+                    self.steam.activate_layer_for_button(button, &target);
+                }
             }
         }
     }
@@ -550,6 +573,68 @@ impl AppCore {
     pub fn active_operation_set_id(&self) -> &str {
         // 【Rust 语法】`&self.steam.profile.active_operation_set_id`：取 String 的引用；返回 &str 时 String 会自动解引用强制转换（deref coercion）。
         &self.steam.profile.active_operation_set_id
+    }
+
+    /// 新增一个操作层（id 取当前集内最大编号 +1），返回新层 id；
+    /// 失败（无激活操作集）返回空串。
+    pub fn add_layer(&mut self) -> String {
+        // 新增层会让 Vec 扩容，先清空激活层栈，避免已激活层的引用失效
+        self.steam.deactivate_all_layers();
+        let new_id = {
+            let Some(set) = self.steam.profile.active_set_mut() else {
+                return String::new();
+            };
+            let id = set.unique_layer_id();
+            let mut layer = OperationLayer::new(&id);
+            layer.name = crate::core::input_types::layer_display_name(&id); // 显示名沿用预设别名
+            set.layers.push(layer);
+            id
+        };
+        self.profile_rev += 1;
+        self.steam.notify_operation_set_changed();
+        new_id
+    }
+
+    /// 删除一个操作层（公共层不可删）：同时清理公共层/其他层中指向该层的
+    /// 切层映射与双键组合配置，避免留下永不生效的悬空目标。返回是否删除成功。
+    pub fn delete_layer(&mut self, layer_id: &str) -> bool {
+        if layer_id.is_empty() || layer_id == "Common" {
+            return false; // 公共层不可删除
+        }
+        // 删除层会让 Vec 缩短，先清空激活层栈
+        self.steam.deactivate_all_layers();
+        {
+            let Some(set) = self.steam.profile.active_set_mut() else {
+                return false;
+            };
+            let Some(pos) = set.layers.iter().position(|l| l.id == layer_id) else {
+                return false; // 层不存在
+            };
+            let removed = set.layers.remove(pos);
+            let names = [removed.id.clone(), removed.name.clone()];
+            // 动作是否指向被删除的层
+            let hits_removed = |m: &KeyMapping| {
+                matches!(
+                    m.action.r#type,
+                    ActionType::SwitchLayer | ActionType::SwitchLayerAndKey
+                ) && m
+                    .action
+                    .layer_name
+                    .as_deref()
+                    .map_or(false, |n| names.iter().any(|t| t == n))
+            };
+            // 公共层与其余操作层中清除指向该层的切层映射
+            set.common_layer.button_mappings.retain(|_, m| !hits_removed(m));
+            for l in set.layers.iter_mut() {
+                l.button_mappings.retain(|_, m| !hits_removed(m));
+            }
+            // 清除以该层为目标的双键组合切层
+            set.combo_switches
+                .retain(|c| c.target_layer != removed.id && c.target_layer != removed.name);
+        }
+        self.profile_rev += 1;
+        self.steam.notify_operation_set_changed();
+        true
     }
 }
 

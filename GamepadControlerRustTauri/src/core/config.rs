@@ -105,6 +105,16 @@ pub fn profile_to_json(profile: &ControllerProfile) -> Value {
             // push 向 Vec 尾部追加元素；`layer_to_json` 把单个层结构体转成 Value。
             layers.push(layer_to_json(layer));
         }
+        // 双键组合切层配置
+        let mut combos = Vec::new();
+        for c in &set.combo_switches {
+            combos.push(json!({
+                "buttonA": crate::core::input_types::controller_button_name(c.button_a),
+                "buttonB": crate::core::input_types::controller_button_name(c.button_b),
+                "targetLayer": c.target_layer,
+                "keyCode": c.key_code,
+            }));
+        }
         // 用 json! 宏组装一个操作集的 JSON 对象并 push 进 sets。
         sets.push(json!({
             "id": set.id,
@@ -112,6 +122,7 @@ pub fn profile_to_json(profile: &ControllerProfile) -> Value {
             // 公共层同样调用 layer_to_json 转换（传入借用）。
             "commonLayer": layer_to_json(&set.common_layer),
             "layers": layers,
+            "comboSwitches": combos,
         }));
     }
 
@@ -238,6 +249,7 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
                     name: so.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                     common_layer: OperationLayer::new("Common"),
                     layers: Vec::new(),
+                    combo_switches: Vec::new(),
                 };
                 // 若 id 为空，则回退到用 name 作为 id。
                 if set.id.is_empty() {
@@ -271,6 +283,34 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
                         }
                     }
                 }
+                // 双键组合切层配置（旧配置没有该字段，缺省为空）
+                if let Some(Value::Array(carr)) = so.get("comboSwitches") {
+                    for cv in carr {
+                        if !cv.is_object() {
+                            continue;
+                        }
+                        let co = cv.as_object().unwrap();
+                        let a = co
+                            .get("buttonA")
+                            .and_then(|x| x.as_str())
+                            .and_then(crate::core::input_types::controller_button_from_name);
+                        let b = co
+                            .get("buttonB")
+                            .and_then(|x| x.as_str())
+                            .and_then(crate::core::input_types::controller_button_from_name);
+                        let target = co.get("targetLayer").and_then(|x| x.as_str()).unwrap_or("");
+                        if let (Some(a), Some(b)) = (a, b) {
+                            if !target.is_empty() && a != b {
+                                set.combo_switches.push(crate::core::mapping_types::ComboSwitch {
+                                    button_a: a,
+                                    button_b: b,
+                                    target_layer: target.to_string(),
+                                    key_code: co.get("keyCode").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+                                });
+                            }
+                        }
+                    }
+                }
                 // 把完整的操作集加入 sets 数组。
                 sets.push(set);
             }
@@ -286,6 +326,7 @@ pub fn profile_from_json_value(root: &Value) -> Result<ControllerProfile, String
                 name: "默认操作集".to_string(),
                 common_layer: OperationLayer::new("Common"),
                 layers: Vec::new(),
+                combo_switches: Vec::new(),
             };
             // 从旧格式顶层读取公共层；是对象才解析，否则用空公共层。
             set.common_layer = match root.get("commonLayer") {

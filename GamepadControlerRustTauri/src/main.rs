@@ -149,6 +149,9 @@ fn main() { // 程序主入口
             commands::set_layer_fallback, // 设置未映射时是否回落公共层
             commands::open_app, // 打开应用
             commands::rename_layer, // 重命名层集
+            commands::add_layer, // 新增操作层
+            commands::delete_layer, // 删除操作层
+            commands::set_combo_switch, // 配置双键组合激活
             commands::change_layer_trigger_button, // 改变层的激活按钮
             commands::set_long_press, // 配置长按动作
             commands::set_state_conditions, // 配置映射的状态条件

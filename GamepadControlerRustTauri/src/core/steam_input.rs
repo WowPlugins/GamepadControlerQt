@@ -42,6 +42,9 @@ pub enum ButtonDispatch {
     },
     /// 松开激活层的按钮：该层已停用，需释放该层内产生的鼠标左右键锁存（需求6）
     DeactivateLayer(String),
+    /// 双键组合切层结束：松开组合中的任一键，层已停用；
+    /// trigger 为按下组合时注入组合键所用的按钮（映射器据此精确释放）
+    DeactivateCombo { layer_id: String, trigger: ControllerButton },
     /// 切换映射启停请求（ToggleMapping）
     ToggleMapping, // 切换映射启停请求
     /// 切换屏幕键盘请求（ToggleOnScreenKeyboard）
@@ -65,7 +68,18 @@ pub struct SteamInput {
     held_buttons: HashSet<ControllerButton>, // 手柄按键集合
     /// 当前激活层 id（未激活任何操作层时为 "Common"）
     active_layer_name: String, // 当前激活层名
+    /// 当前生效的双键组合切层（松开任一键时结束）
+    combo_active: Option<ActiveCombo>, // 生效中的组合切层
 } // 结构体定义结束
+
+/// 生效中的双键组合切层记录
+#[derive(Debug, Clone)]
+struct ActiveCombo {
+    button_a: ControllerButton, // 组合键 1
+    button_b: ControllerButton, // 组合键 2
+    layer_id: String,           // 已激活的目标层 id
+    trigger: ControllerButton,  // 后按下的按钮（组合键注入的触发源）
+}
 
 // 【Rust 语法】impl SteamInput { ... }：为 SteamInput 定义实现块（类似 C++ 类内成员函数定义）。
 impl SteamInput {
@@ -80,6 +94,7 @@ impl SteamInput {
             held_buttons: HashSet::new(), // 空按持集合
             active_layer_name: "Common".to_string(), // 【Rust 语法】"..." 是字符串字面量（类型 &str）；
             // .to_string() 方法把 &str 转为拥有所有权的 String。
+            combo_active: None, // 初始没有生效中的组合切层
         } // Self 构造结束
     } // new 结束
 
@@ -159,7 +174,63 @@ impl SteamInput {
     pub fn deactivate_all_layers(&mut self) { // 停用全部层
         self.active_layers.clear(); // 清空激活层栈
         self.button_triggered_layers.clear(); // 清空触发层记录
+        self.combo_active = None; // 清空生效中的双键组合切层
         self.update_active_layer_name(); // 更新激活层名（回落为 Common）
+    } // 方法结束
+
+    /// 目标层名（id 或显示名）解析为当前操作集内的层 id
+    fn resolve_layer_id(&self, target: &str) -> Option<String> {
+        self.profile
+            .find_layer(target) // 先按 id 查找
+            .map(|l| l.id.clone())
+            .or_else(|| {
+                self.profile // 兼容旧配置：按显示名查找
+                    .layers()
+                    .into_iter()
+                    .find(|l| l.name == target)
+                    .map(|l| l.id.clone())
+            })
+    } // 方法结束
+
+    /// 由「长按动作」激活目标层：记录该按钮的触发关系，按钮松开时停用。
+    /// 用于长按触发的「切层+按键」——长按判定发生在映射器，层激活需要引擎配合。
+    pub fn activate_layer_for_button(&mut self, button: ControllerButton, target: &str) {
+        let Some(tid) = self.resolve_layer_id(target) else {
+            return; // 目标层不存在（可能已被删除）
+        };
+        // 该按钮此前激活过别的层（如按下时先执行了短按切层）：先停用旧层，避免叠加
+        if let Some(old) = self.button_triggered_layers.get(&button).cloned() {
+            if old != tid {
+                self.deactivate_layer(&old);
+            }
+        }
+        if self.is_layer_active(&tid) {
+            return; // 已激活则不重复激活
+        }
+        self.activate_layer(&tid); // 激活目标层
+        self.button_triggered_layers.insert(button, tid); // 记录按钮 → 层，松开时停用
+    } // 方法结束
+
+    /// 查询当前按下的按钮是否构成某个双键组合切层配置
+    /// 返回 (组合键1, 组合键2, 目标层, 主键码)
+    fn match_combo(&self, button: ControllerButton) -> Option<(ControllerButton, ControllerButton, String, i32)> {
+        let set = self.profile.active_set()?;
+        for c in &set.combo_switches {
+            if c.button_a == c.button_b {
+                continue; // 非法配置（同一个键）直接跳过
+            }
+            let other = if c.button_a == button {
+                c.button_b
+            } else if c.button_b == button {
+                c.button_a
+            } else {
+                continue; // 当前按钮不在此组合内
+            };
+            if self.held_buttons.contains(&other) {
+                return Some((c.button_a, c.button_b, c.target_layer.clone(), c.key_code));
+            }
+        }
+        None
     } // 方法结束
 
     /// 指定层（按 id）当前是否激活
@@ -265,14 +336,63 @@ impl SteamInput {
             self.held_buttons.remove(&button); // 从按持集合移除
         } // 分支结束
 
+        // 松开时：若该按键属于生效中的双键组合切层，停用目标层并通知映射器释放组合键
+        if !is_pressed {
+            if let Some(combo) = &self.combo_active {
+                if combo.button_a == button || combo.button_b == button {
+                    let layer_id = combo.layer_id.clone(); // 目标层 id
+                    let trigger = combo.trigger; // 组合键注入的触发按钮
+                    self.combo_active = None; // 结束组合状态
+                    self.deactivate_layer(&layer_id); // 停用目标层
+                    return ButtonDispatch::DeactivateCombo { layer_id, trigger };
+                }
+            }
+        }
+
         // 松开时：若该按键激活了某个层，停用该层并通知映射器释放该层内产生的鼠标锁存
         if !is_pressed { // 仅在松开时处理层停用
             if let Some(triggered_id) = self.button_triggered_layers.remove(&button) { // 【Rust 语法】HashMap::remove 返回 Option<V>；
             // if let Some(...) 解包：若该按钮之前激活过某层则取出其 id。
                 self.deactivate_layer(&triggered_id); // 停用该按钮激活的层
-                return ButtonDispatch::DeactivateLayer(triggered_id); // 通知映射器释放该层内产生的鼠标左右键锁存（需求6）
+                return ButtonDispatch::DeactivateLayer(triggered_id); // 通知映射器释放该层内产生的鼠标左键锁存（需求6）
             } // 触发层分支结束
         } // 松开分支结束
+
+        // 双键组合切层：同时按下两个键即激活目标层（优先于单键映射）
+        if is_pressed && self.combo_active.is_none() {
+            if let Some((button_a, button_b, target, key_code)) = self.match_combo(button) {
+                if let Some(tid) = self.resolve_layer_id(&target) {
+                    // 组合中的按键若各自已激活别的层（单键按下先执行了映射），先停用，避免叠加
+                    for b in [button_a, button_b] {
+                        if let Some(old) = self.button_triggered_layers.get(&b).cloned() {
+                            if old != tid {
+                                self.button_triggered_layers.remove(&b);
+                                self.deactivate_layer(&old);
+                            }
+                        }
+                    }
+                    if !self.is_layer_active(&tid) {
+                        self.activate_layer(&tid); // 激活目标层
+                    }
+                    self.combo_active = Some(ActiveCombo {
+                        button_a,
+                        button_b,
+                        layer_id: tid.clone(),
+                        trigger: button, // 后按下的按钮作为组合键注入的触发源
+                    });
+                    if key_code != 0 {
+                        // 切层+按键：把组合键交给映射器注入（松开任一键时按已注入状态释放）
+                        let action = MappedAction::switch_layer_and_key(&tid, key_code);
+                        return ButtonDispatch::Execute {
+                            is_pressed: true,
+                            mapping: KeyMapping::new(action),
+                            layer_id: tid,
+                        };
+                    }
+                    return ButtonDispatch::None; // 纯切层：不注入任何键
+                }
+            }
+        }
 
         // 查询当前层栈下的有效映射；无映射则不产生任何事件
         let Some((mapping, layer_id)) = self.get_effective_mapping_with_layer(button) else { // 【Rust 语法】let-else 语句：若 Option 为 Some 则解包为 mapping/layer_id 继续执行；

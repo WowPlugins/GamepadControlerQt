@@ -598,6 +598,23 @@ impl Default for GlobalSettings {
 } // 结束 impl Default for GlobalSettings 块
 
 // ---------------------------------------------------------------------
+// ComboSwitch —— 双键组合切层
+// 同时按下两个手柄按键即可激活目标层（可选同时按下组合键），
+// 松开任一按键回退；按住的组合键由映射器按已注入状态释放。
+// ---------------------------------------------------------------------
+#[derive(Debug, Clone)]
+pub struct ComboSwitch {
+    /// 组合键 1（按钮枚举名）
+    pub button_a: ControllerButton,
+    /// 组合键 2
+    pub button_b: ControllerButton,
+    /// 目标层 id
+    pub target_layer: String,
+    /// 切层同时按下的主键（Android KeyCode；0 表示只切层不按键）
+    pub key_code: i32,
+}
+
+// ---------------------------------------------------------------------
 // OperationSet —— 操作集（最顶层容器）
 // ---------------------------------------------------------------------
 // 【Rust 语法】#[derive(Debug, Clone)]：实现调试输出与克隆。
@@ -608,6 +625,8 @@ pub struct OperationSet {
     pub name: String, // 操作集显示名称
     pub common_layer: OperationLayer, // 公共层（始终激活、优先度最低，作为兜底映射）
     pub layers: Vec<OperationLayer>, // 【Rust 语法】Vec<OperationLayer> 动态数组：操作层列表
+    /// 双键组合切层配置（每层最多一条）
+    pub combo_switches: Vec<ComboSwitch>,
 } // 结束 OperationSet 结构体定义
 
 // 【Rust 语法】impl 块：为 OperationSet 实现方法。
@@ -640,8 +659,25 @@ impl OperationSet {
             name: set_name.to_string(), // 操作集名称
             common_layer: common, // 公共层
             layers, // 【Rust 语法】字段简写语法：字段名与局部变量同名时可省略 `layers: layers` 直接写 `layers`
+            combo_switches: Vec::new(), // 默认没有双键组合切层配置
         } // 结束 Self 结构体字面量
     } // 结束 create_empty 函数
+
+    /// 生成一个不与现有操作层重复的新层 id（"Layer11"、"Layer12"...），
+    /// 已存在的 id 永不复用（删除层后再次新增也不会撞号）。
+    pub fn unique_layer_id(&self) -> String {
+        let mut max = 0;
+        for l in &self.layers {
+            if let Some(rest) = l.id.strip_prefix("Layer") {
+                if let Ok(n) = rest.parse::<i32>() {
+                    if n > max {
+                        max = n;
+                    }
+                }
+            }
+        }
+        format!("Layer{}", max + 1) // 编号取最大值 +1
+    } // 结束 unique_layer_id 函数
 } // 结束 impl OperationSet 块
 
 // ---------------------------------------------------------------------
