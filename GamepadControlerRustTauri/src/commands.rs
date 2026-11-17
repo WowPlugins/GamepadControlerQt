@@ -164,6 +164,7 @@ pub struct MappingView { // 单个按键映射的展示视图
     click_layer_only: bool, // 点击「只切换层」开关：注入前是否掩蔽切层键按住的修饰键
     long_press_layer_only: bool, // 长按「只切换层」开关：含义同上
     has_mapping: bool, // 是否已有映射
+    placeholder: bool, // 主动作是否为空占位（仅配置了长按动作，短按不注入任何键）
     mouse_button: Option<MouseButton>, // 鼠标键（Some 表示有，None 表示无）
     layer_name: Option<String>, // 目标层名称（切换层动作时使用）
     long_press: Option<ActionView>, // 长按动作（None 表示未配置长按）
@@ -194,6 +195,7 @@ impl MappingView {
             click_layer_only: true, // 点击「只切换层」开关默认打开
             long_press_layer_only: false, // 长按「只切换层」开关默认关闭
             has_mapping: false, // 标记为无映射
+            placeholder: false, // 非占位
             mouse_button: None, // 无鼠标键
             layer_name: None, // 无目标层名称
             long_press: None, // 无长按动作
@@ -486,9 +488,33 @@ pub fn get_overlay_snapshot(state: State<'_, AppState>) -> OverlaySnapshot { // 
     if let Some(lr) = layer_ref { // 层引用存在才处理
         for b in all_controller_buttons() { // 【Rust 语法】for 循环：遍历手柄全部按钮
             if let Some(m) = lr.get_mapping(b) { // 该按钮存在映射才处理
+                // 空动作占位（仅配置了长按）：显示长按描述，避免显示无意义的「鼠标移动」
+                let desc = if m.action.r#type == ActionType::MouseMove {
+                    match m.long_press.as_ref() {
+                        Some(lp) => format!(
+                            "长按: {}{}",
+                            describe_action(lp),
+                            if m.long_press_subs.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    "+{}",
+                                    m.long_press_subs
+                                        .iter()
+                                        .map(|&k| key_code_to_name(k))
+                                        .collect::<Vec<_>>()
+                                        .join("+")
+                                )
+                            }
+                        ),
+                        None => continue, // 无长按则跳过该空映射
+                    }
+                } else {
+                    m.describe() // 普通映射描述
+                };
                 mappings.push(MappingRow { // 【Rust 语法】Vec::push：向向量尾部追加元素
                     button: controller_button_display_name(b).to_string(), // 按钮显示名
-                    desc: m.describe(), // 映射描述
+                    desc, // 映射描述
                     held: held.contains(&b), // 按钮是否被按住
                 }); // MappingRow 构造结束并压入向量
             } // 内层 if-let 结束
@@ -1115,7 +1141,10 @@ pub fn get_layer_edit_snapshot(state: State<'_, AppState>, layer_id: String) -> 
         .into_iter() // 【Rust 语法】into_iter()：消费所有权生成迭代器
         .map(|b| { // 逐个按钮转换
             let m = layer.get_mapping(b); // 该按键在当前层的映射（None 表示未映射）
-            let desc = m.map(|k| k.describe()).unwrap_or_default(); // 点击/主动作描述：未映射为空串
+            // 点击/主动作描述：未映射为空串；空动作占位（仅配置长按）也视为未映射
+            let desc = m
+                .map(|k| if k.action.r#type == ActionType::MouseMove { String::new() } else { k.describe() })
+                .unwrap_or_default();
             // 长按动作描述（含长按子命令）；未配置长按时为 None
             let long_desc = m.and_then(|k| { // 有映射才继续
                 let lp = k.long_press.as_ref()?; // 未配置长按直接返回 None
@@ -1161,11 +1190,12 @@ pub fn get_mapping(state: State<'_, AppState>, layer_id: String, button: String)
         Some(m) => MappingView { // 有映射则构造视图
             key_code: m.action.key_code, // 键盘键码（存储 Android KeyCode 常量，运行时再转换为 Windows 虚拟键码）
             kind: kind_str(&m.action), // 动作类型字符串
-            desc: describe_action(&m.action), // 动作描述
+            desc: if m.action.r#type == ActionType::MouseMove { "仅长按".to_string() } else { describe_action(&m.action) }, // 空动作占位显示为「仅长按」
             subs: m.sub_commands.iter().map(|&k| key_code_to_name(k)).collect(), // 【Rust 语法】闭包 |&k| 解构引用；子命令键码转名称
             click_layer_only: m.click_layer_only, // 点击「只切换层」开关
             long_press_layer_only: m.long_press_layer_only, // 长按「只切换层」开关
             has_mapping: true, // 标记有映射
+            placeholder: m.action.r#type == ActionType::MouseMove, // 空动作占位（仅配置了长按）
             mouse_button: Some(m.action.mouse_button), // 鼠标键（Some 表示有，None 表示无）
             layer_name: m.action.layer_name.clone(), // 目标层名称（切换层动作时使用）
             long_press: m.long_press.as_ref().map(|lp| action_view(lp, &m.long_press_subs)), // 长按动作视图
@@ -1277,7 +1307,16 @@ pub fn set_long_press(
     let action = kind.as_deref().and_then(|k| build_action(k, key_code, mouse_button, layer_name));
     let mut core = state.shared.core.lock().unwrap();
     if let Some(layer) = find_layer_mut(&mut core.steam.profile, &layer_id) {
-        if let Some(m) = layer.button_mappings.get_mut(&b) { // 长按依附于已有主动作
+        // 按键尚未配置主动作时，先建立占位映射（空动作不注入任何键），
+        // 这样新层里也能直接给按键挂长按动作
+        if !layer.button_mappings.contains_key(&b) {
+            if action.is_none() {
+                return; // 取消长按且本来就没有映射：什么都不用做
+            }
+            layer.button_mappings.insert(b, KeyMapping::new(MappedAction::mouse_move()));
+        }
+        let mut remove_placeholder = false; // 取消长按后是否需要删除空占位映射
+        if let Some(m) = layer.button_mappings.get_mut(&b) {
             let same_kind = match (&m.long_press, &action) { // 长按类型是否未变
                 (Some(old), Some(new)) => old.r#type == new.r#type, // 类型相同则保留子命令
                 _ => false, // 新建或取消时清空子命令
@@ -1292,9 +1331,14 @@ pub fn set_long_press(
                 m.long_press_subs.clear(); // 清理长按子命令
                 m.long_state_conditions.clear(); // 取消长按后条件无依附对象，一并清理
                 m.long_state_logic = StateLogic::Or;
+                // 主动作若只是占位，则整条映射删除，恢复「未映射」
+                remove_placeholder = m.action.r#type == ActionType::MouseMove;
             }
-            core.profile_rev += 1;
         }
+        if remove_placeholder {
+            layer.button_mappings.remove(&b);
+        }
+        core.profile_rev += 1;
     }
 } // 函数结束
 

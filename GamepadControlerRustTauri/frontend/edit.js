@@ -155,7 +155,7 @@ let currentLongMouse = 'LEFT'; // 长按动作已配置的鼠标键（切换长�
 // 否则 A/B/X/Y 已配置的映射不显示，要切到别的按键再切回来才出现。
 function syncSelectedKind() {
   return invoke('get_mapping', { layerId: editLayerId, button: selectedButton }).then((map) => {
-    editKind = map.has_mapping ? map.kind : 'none'; // 有映射则按其类型显示，否则显示未设置
+    editKind = map.has_mapping && !map.placeholder ? map.kind : 'none'; // 空动作占位（仅长按）按未设置显示
     editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
     prevEdit = null; // 强制下一轮重新渲染
   });
@@ -295,7 +295,9 @@ function renderEdit(info, map) {
   $('edit-fallback-section').style.display = isCommon ? 'none' : '';
   $('edit-fallback-click').checked = selBtn.fallback_click !== false;
   $('edit-fallback-long').checked = selBtn.fallback_long !== false;
-  $('edit-fallback-hint').textContent = map.has_mapping
+  $('edit-fallback-hint').textContent = map.placeholder
+    ? '当前按键只配置了长按动作：短按不会注入任何键，也不会回落到公共层。'
+    : map.has_mapping
     ? '当前按键在本层已有映射，回落开关只在清除本层映射后生效。'
     : '当前按键在本层未映射：关闭后对应短按/长按不会再使用公共层映射。';
   $('edit-long-only-row').style.display = map.long_press ? 'flex' : 'none'; // 长按未配置时隐藏
@@ -376,12 +378,11 @@ function cycleCondition(conds, logic, stateId, longPress) {
   prevEdit = null; // 强制下一轮重新渲染
 }
 
-// renderLongPress：渲染「长按动作」配置区（仅在当前按键已有主动作时可用）
+// renderLongPress：渲染「长按动作」配置区（按键没有短按动作时也可直接配置长按）
 function renderLongPress(info, map) {
-  const hasMapping = map.has_mapping && editKind !== 'none'; // 无主动作（或已选未设置）时长按无依附对象
   const lp = map.long_press || null; // 已配置的长按动作（ActionView）或 null
   const showLongState = !!lp; // 长按状态条件仅在已配置长按动作时显示
-  $('edit-long-section').style.display = hasMapping ? '' : 'none'; // 整块长按区显隐
+  $('edit-long-section').style.display = ''; // 长按区始终显示：新层未映射的按键也能直接配置长按
   $('edit-long-states-label').style.display = showLongState ? '' : 'none';
   $('edit-long-states').style.display = showLongState ? '' : 'none';
   if (!showLongState) $('edit-long-state-logic').style.display = 'none';
@@ -389,7 +390,6 @@ function renderLongPress(info, map) {
   $('edit-long-subs').style.display = 'none';
   $('edit-long-ms-row').style.display = lp ? '' : 'none'; // 阈值行仅在已配置长按时显示
   $('edit-long-clear').style.display = lp ? '' : 'none'; // 取消长按按钮仅在已配置长按时显示
-  if (!hasMapping) return; // 无主动作则整块隐藏
 
   // 长按动作类型 chips（data-tip 提供悬浮说明）
   $('edit-long-kinds').innerHTML = LONG_PRESS_KINDS.map(([k, label, tip]) => // 遍历可选类型
@@ -500,7 +500,7 @@ const App = {
   selectButton(name) { // 切换选中手柄按键
     selectedButton = name; // 更新选中按键
     invoke('get_mapping', { layerId: editLayerId, button: name }).then((map) => { // 查询新按键的映射
-      editKind = map.has_mapping ? map.kind : 'none'; // 有映射则按其类型显示，否则显示未设置
+      editKind = map.has_mapping && !map.placeholder ? map.kind : 'none'; // 空动作占位（仅长按）按未设置显示
       editLongKind = map.long_press ? map.long_press.kind : null; // 同步长按动作类型
       prevEdit = null; // 强制下一轮重新渲染
     });
