@@ -262,6 +262,13 @@ impl MapperState {
         self.right_look_locked = false; // 清除快捷键右键视角锁定标记
         self.wasd_auto_lock_suspended = false; // 清除 WASD 自动锁定临时禁用标记
         self.wasd_resume_at = None; // 清除延迟恢复时刻
+        if !self.pending_long_press.is_empty() { // 有未判定的长按正被清掉时记录，便于排查长按不触发
+            crate::dbg_log!(
+                "释放全部输入：清空 {} 个待判定长按 {:?}",
+                self.pending_long_press.len(),
+                self.pending_long_press.keys().collect::<Vec<_>>()
+            );
+        }
         self.pending_long_press.clear(); // 清空待判定长按
         self.long_press_buttons.clear(); // 清空已触发长按记录
         self.pending_mask_restore.clear(); // 清空掩蔽延迟按回队列
@@ -490,9 +497,17 @@ impl MapperState {
     ) { // 结束参数列表，函数体开始
         // 「只切换层」在公共层无效：公共层没有切层键按住的修饰键，不参与掩蔽
         let click_layer_only = mapping.click_layer_only && layer_id != "Common";
+        crate::dbg_log!(
+            "按钮 {:?} 按下={} 命中层={} 短按类型={:?} 配置长按={}",
+            button, is_pressed, layer_id, mapping.action.r#type, mapping.long_press.is_some()
+        );
         if !is_pressed { // 松开分支
             let fired_long = self.long_press_buttons.remove(&button); // 该按钮是否已触发过长按
             let had_pending = self.pending_long_press.remove(&button).is_some(); // 是否还有未判定的长按
+            crate::dbg_log!(
+                "按钮 {:?} 松开 已触发长按={} 有待判定长按={}",
+                button, fired_long, had_pending
+            );
             // 配置了长按但未超阈值就松开：此时才执行短按动作（按下记录 + 立即释放 = 一次点按），
             // 这样长按时不会先误触发短按。切层动作在按下时已执行，跳过以免重复切层。
             if had_pending && !fired_long && !matches!(mapping.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
@@ -517,6 +532,7 @@ impl MapperState {
                 self.execute_press(button, &mapping.action, &mapping.sub_commands, layer_id, false, mapping.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe); // 切层必须按下立即生效
             }
             let threshold = mapping.long_press_ms.clamp(100, 5000); // 阈值限幅 100~5000ms
+            crate::dbg_log!("长按已登记 {:?} 阈值={}ms 长按类型={:?}", button, threshold, long_action.r#type);
             self.pending_long_press.insert(
                 button,
                 PendingLongPress {
@@ -573,16 +589,28 @@ impl MapperState {
             .collect();
         for button in fired { // 逐个切换为长按动作
             if let Some(p) = self.pending_long_press.remove(&button) {
+                crate::dbg_log!(
+                    "长按触发 {:?} 经过={}ms 阈值={}ms 动作类型={:?}",
+                    button,
+                    now.duration_since(p.started).as_millis(),
+                    p.threshold_ms,
+                    p.action.r#type
+                );
                 self.release_button_injection(button, injector); // 先释放按下时已注入的状态（配置长按后短按未注入，通常无内容）
                 self.long_press_buttons.insert(button); // 标记为长按已触发
                 let layer = p.layer_id.clone(); // 先克隆层 id，避免与 &mut self 借用冲突
-                // 长按动作是「切层+按键」：层激活由映射引擎负责，先记录下来
-                if p.action.r#type == ActionType::SwitchLayerAndKey {
+                // 长按动作是「切换层」或「切层+按键」：层激活由映射引擎负责，先记录下来
+                if matches!(p.action.r#type, ActionType::SwitchLayer | ActionType::SwitchLayerAndKey) {
                     if let (TriggerId::Pad(pad_button), Some(target)) = (button, p.action.layer_name.as_ref()) {
                         layer_switches.push((pad_button, target.clone()));
                     }
                 }
                 self.execute_press(button, &p.action, &p.subs, &layer, p.layer_only, p.suspend_wasd_auto_lock, injector, event_tx, look, wow_exe); // 执行长按动作
+                // 长按动作是「点按」语义（键盘键 / 鼠标单击）：到阈值立即注入并自动释放，
+                // 不按住保持到按钮松开，否则游戏里会一直处于按下状态
+                if matches!(p.action.r#type, ActionType::KeyboardKey | ActionType::MouseClick) {
+                    self.release_button_injection(button, injector);
+                }
             } // 结束 if let 分支
         } // 结束 for 循环
         layer_switches
